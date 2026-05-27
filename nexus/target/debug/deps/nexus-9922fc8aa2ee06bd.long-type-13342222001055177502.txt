@@ -1,1 +1,0 @@
-Sse<futures_util::stream::Map<impl Stream<Item = std::result::Result<axum::body::Bytes, reqwest::Error>>, {closure@src/gateway/mod.rs:159:37: 159:44}>>

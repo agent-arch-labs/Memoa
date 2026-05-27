@@ -46,6 +46,7 @@ node_modules
 twine/node_modules
 twine/src-tauri/gen
 twine/src-tauri/target
+nexus/target
 package-lock.json
 package.json
 release/
