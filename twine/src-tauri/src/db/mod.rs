@@ -16,12 +16,16 @@
 pub mod link;
 pub mod note;
 pub mod tag;
+pub mod financial;
 
 use crate::error::AppResult;
 use rusqlite::Connection;
 use std::sync::Mutex;
 
 static DB: Mutex<Option<Connection>> = Mutex::new(None);
+
+#[cfg(test)]
+pub static TEST_DB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn init(db_path: &std::path::Path) -> AppResult<()> {
     if let Some(parent) = db_path.parent() {
@@ -33,6 +37,9 @@ pub fn init(db_path: &std::path::Path) -> AppResult<()> {
 
     let mut db = DB.lock().unwrap();
     *db = Some(conn);
+    drop(db);
+
+    crate::embedding::ensure_table()?;
 
     Ok(())
 }

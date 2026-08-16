@@ -3,6 +3,8 @@ import { EditorToolbar } from "./EditorToolbar";
 import { EditorContent } from "./EditorContent";
 import { WelcomeScreen } from "./WelcomeScreen";
 import { SplitEditorContent } from "./SplitEditorContent";
+import { EditorTabBar } from "./EditorTabBar";
+import { Breadcrumbs } from "./Breadcrumbs";
 
 export function EditorPanel() {
   const currentNotePath = useAppStore((s) => s.currentNotePath);
@@ -17,6 +19,7 @@ export function EditorPanel() {
   if (splitNotePath) {
     return (
       <div className="h-full flex flex-col">
+        <EditorTabBar />
         <EditorToolbar />
         <div className="flex-1 flex overflow-hidden">
           <div className="flex-1 min-w-0 border-r border-[var(--color-border)] overflow-hidden">
@@ -36,7 +39,9 @@ export function EditorPanel() {
 
   return (
     <div className="h-full flex flex-col">
+      <EditorTabBar />
       <EditorToolbar />
+      <Breadcrumbs />
       <div className="flex-1 overflow-hidden">
         {currentNotePath ? (
           <EditorContent content={currentNoteContent} />

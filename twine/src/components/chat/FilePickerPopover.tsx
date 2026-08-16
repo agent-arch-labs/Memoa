@@ -134,10 +134,14 @@ export function FilePickerPopover({
                   : "border-[var(--color-border)]"
               }`}
             >
-              {isChecked && "✓"}
+              {isChecked && <svg width="8" height="8" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 8 7 12 13 4" /></svg>}
             </span>
-            <span className="shrink-0 text-xs">
-              {isDir ? "📁" : "📄"}
+            <span className="shrink-0 flex items-center">
+              {isDir ? (
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 4H8l-1-2H2a1 1 0 00-1 1v10a1 1 0 001 1h12a1 1 0 001-1V5a1 1 0 00-1-1zm-1 9H3V6h10v7z" /></svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M10 1H3a1 1 0 00-1 1v12a1 1 0 001 1h10a1 1 0 001-1V5l-4-4zm-.5 1.5L12.5 5.5H9.5V2.5zM3 14V2h5v4h4v8H3z" /></svg>
+              )}
             </span>
             <span className="truncate">{item.name}</span>
           </button>
@@ -162,7 +166,7 @@ export function FilePickerPopover({
           className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
           onClick={onClose}
         >
-          ✕
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="4" x2="12" y2="12" /><line x1="12" y1="4" x2="4" y2="12" /></svg>
         </button>
       </div>
 

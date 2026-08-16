@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { t } from "@/i18n/locale";
 import { SelectDropdown } from "./SelectDropdown";
+import { useAppStore } from "@/stores/appStore";
 
 export function EditSettings() {
   const [tabSize, setTabSize] = useState("4");
-  const [showLineNumbers, setShowLineNumbers] = useState(true);
-  const [autoSave, setAutoSave] = useState(true);
   const [spellCheck, setSpellCheck] = useState(false);
+  const autoSaveEnabled = useAppStore((s) => s.autoSaveEnabled);
+  const setAutoSaveEnabled = useAppStore((s) => s.setAutoSaveEnabled);
+  const showLineNumbers = useAppStore((s) => s.showLineNumbers);
+  const setShowLineNumbers = useAppStore((s) => s.setShowLineNumbers);
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-5">
@@ -42,7 +45,7 @@ export function EditSettings() {
         <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
           {t("edit.auto_save.desc")}
         </p>
-        <Toggle value={autoSave} onChange={setAutoSave} />
+        <Toggle value={autoSaveEnabled} onChange={setAutoSaveEnabled} />
       </section>
 
       <section>

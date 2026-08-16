@@ -8,6 +8,7 @@
 
 pub mod ai;
 pub mod agent_rag;
+pub mod astock;
 pub mod file;
 pub mod search;
 pub mod tag;

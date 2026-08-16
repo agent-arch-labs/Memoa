@@ -49,6 +49,7 @@ pub fn open_vault(
     let _ = db::link::create_table();
     let _ = db::tag::create_table();
     let _ = db::tag::cleanup_orphans();
+    let _ = db::financial::create_table();
 
     let note_count = db::note::count_all().unwrap_or(0);
 

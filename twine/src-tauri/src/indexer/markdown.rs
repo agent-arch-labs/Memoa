@@ -139,17 +139,17 @@ pub fn extract_markdown_links(content: &str) -> Vec<LinkInfo> {
 
     for (line_num, line) in content.lines().enumerate() {
         for caps in MARKDOWN_LINK_RE.captures_iter(line) {
-            let target = caps
-                .get(2)
-                .map(|m| {
-                    let url = m.as_str();
-                    if url.ends_with(".md") {
-                        url.trim_end_matches(".md").to_string()
-                    } else {
-                        url.to_string()
-                    }
-                })
-                .unwrap_or_default();
+            let url = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+
+            if url.starts_with("http://") || url.starts_with("https://") || url.contains("://") {
+                continue;
+            }
+
+            let target = if url.ends_with(".md") {
+                url.trim_end_matches(".md").to_string()
+            } else {
+                url.to_string()
+            };
             let alias = caps.get(1).map(|m| m.as_str().to_string());
 
             links.push(LinkInfo {
@@ -167,10 +167,15 @@ pub fn extract_markdown_links(content: &str) -> Vec<LinkInfo> {
 pub fn extract_tags(content: &str) -> Vec<String> {
     let mut tags = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut in_code_block = false;
 
     for line in content.lines() {
-        // Skip code blocks
-        if line.trim_start().starts_with("```") {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if in_code_block {
             continue;
         }
         for cap in TAG_RE.captures_iter(line) {
@@ -325,10 +330,9 @@ mod tests {
     fn test_extract_markdown_links() {
         let content = "[text](target.md) and [other](https://example.com)";
         let links = extract_markdown_links(content);
-        assert_eq!(links.len(), 2);
+        assert_eq!(links.len(), 1, "外部 URL 应被过滤");
         assert_eq!(links[0].target, "target");
         assert_eq!(links[0].alias, Some("text".to_string()));
-        assert_eq!(links[1].target, "https://example.com");
     }
 
     #[test]
@@ -351,9 +355,9 @@ mod tests {
     fn test_extract_tags_skip_code_fences() {
         let content = "#tag1\n```python\n#code_tag\n```\n#tag2";
         let tags = extract_tags(content);
-        // ```python line is skipped but #code_tag inside block still matches
         assert!(tags.contains(&"tag1".to_string()));
         assert!(tags.contains(&"tag2".to_string()));
+        assert!(!tags.contains(&"code_tag".to_string()), "代码块内的标签不应被提取");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTauriCommands } from "@/hooks/useTauriCommands";
 import { getJson, setJson } from "@/services/storageService";
+import { IconAdd, IconSaveBtn } from "@/components/common/Icons";
 
 export type SearchProviderType = "tavily" | "custom";
 
@@ -290,10 +291,10 @@ export function SearchExtensionsSettings() {
             </div>
 
             <button
-              className="btn btn-primary text-xs px-3 py-1 w-full"
+              className="btn btn-ghost text-xs px-3 py-1 w-full"
               onClick={addSearchTool}
             >
-              添加检索工具
+              <IconAdd size={11} /> 添加检索工具
             </button>
           </div>
         )}
@@ -346,10 +347,10 @@ export function SearchExtensionsSettings() {
                 </div>
                 <div className="flex gap-2">
                   <button
-                    className="btn btn-primary text-xs px-3 py-1"
+                    className="btn btn-ghost text-xs px-3 py-1"
                     onClick={() => saveEditTool(search.id)}
                   >
-                    保存
+                    <IconSaveBtn size={11} /> 保存
                   </button>
                   <button
                     className="btn text-xs px-3 py-1"

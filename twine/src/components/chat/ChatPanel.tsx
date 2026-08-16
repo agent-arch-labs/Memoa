@@ -1,16 +1,18 @@
-import { useState, useRef, useEffect, useMemo } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useAppStore } from "@/stores/appStore";
+import { useStockDetailStore } from "@/stores/stockDetailStore";
 import { useSettingsStore, getActiveLlmConfig } from "@/stores/settingsStore";
+import { IconAdd, IconHistory, IconFile, IconLetterStock, IconClose, IconKnowledge, IconSearch, IconFolder, IconWindowMaximize, IconWindowRestore } from "@/components/common/Icons";
 import { useConversationStore } from "@/stores/conversationStore";
 import { useTauriCommands } from "@/hooks/useTauriCommands";
 import { ChatInputArea, type SelectedRef } from "./ChatInputArea";
+import { ChatMessageList } from "./ChatMessageList";
 import { buildSearchRequest } from "../settings/SearchExtensionsSettings";
 import { loadConfig } from "../settings/KnowledgeBaseSettings";
 import type { ChatMessage, MessageSource, ChatMode, AnswerMode, DataSource, AgentRagStepEvent, AgentRagSource } from "@/types";
 import { useSearchExtensions } from "@/hooks/useSearchExtensions";
+import { useChatStreaming } from "@/hooks/useChatStreaming";
 
 interface StreamChunk {
   content: string;
@@ -23,13 +25,23 @@ interface ChatPanelProps {
 
 export function ChatPanel({ width }: ChatPanelProps) {
   const commands = useTauriCommands();
-  const chatMessages = useAppStore((s) => s.chatMessages);
-  const addChatMessage = useAppStore((s) => s.addChatMessage);
-  const updateChatMessage = useAppStore((s) => s.updateChatMessage);
-  const updateChatMessageFeedback = useAppStore((s) => s.updateChatMessageFeedback);
-  const updateChatMessageSources = useAppStore((s) => s.updateChatMessageSources);
-  const clearChat = useAppStore((s) => s.clearChat);
+  const conversations = useConversationStore((s) => s.conversations);
+  const activeConversationId = useConversationStore((s) => s.activeConversationId);
+  const createConversation = useConversationStore((s) => s.createConversation);
+  const addMessageToConversation = useConversationStore((s) => s.addMessageToConversation);
+  const updateMessageInConversation = useConversationStore((s) => s.updateMessageInConversation);
+  const updateMessageSourcesInConversation = useConversationStore((s) => s.updateMessageSourcesInConversation);
+  const updateMessageFeedbackInConversation = useConversationStore((s) => s.updateMessageFeedbackInConversation);
+  const updateLastMessageContent = useConversationStore((s) => s.updateLastMessageContent);
+  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
+  const deleteConversation = useConversationStore((s) => s.deleteConversation);
+
+  const activeConversation = conversations.find((c) => c.id === activeConversationId);
+  const chatMessages: ChatMessage[] = activeConversation?.messages ?? [];
+
   const toggleChat = useAppStore((s) => s.toggleChat);
+  const maximizedPanel = useAppStore((s) => s.maximizedPanel);
+  const toggleMaximizePanel = useAppStore((s) => s.toggleMaximizePanel);
   const currentNoteContent = useAppStore((s) => s.currentNoteContent);
   const currentNotePath = useAppStore((s) => s.currentNotePath);
   const chatMode = useAppStore((s) => s.chatMode);
@@ -39,17 +51,24 @@ export function ChatPanel({ width }: ChatPanelProps) {
   const dataSource = useAppStore((s) => s.dataSource);
   const setDataSource = useAppStore((s) => s.setDataSource);
   const vaultPath = useAppStore((s) => s.vaultPath);
+  const pendingStockPrompt = useAppStore((s) => s.pendingStockPrompt);
+  const setPendingStockPrompt = useAppStore((s) => s.setPendingStockPrompt);
+  const hasStockTarget = useStockDetailStore((s) => s.target !== null);
+
+  // 自动发送股票分析提示词
+  useEffect(() => {
+    if (pendingStockPrompt) {
+      const promptText = pendingStockPrompt;
+      setPendingStockPrompt(null);
+      setInput("");
+      // 股票分析使用联网数据源（Tavily），直接传入覆盖数据源
+      sendMessage(promptText, "online");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingStockPrompt]);
   const settings = useSettingsStore();
   const activeLlmConfig = getActiveLlmConfig(settings);
   const { extensions } = useSearchExtensions();
-
-  const conversations = useConversationStore((s) => s.conversations);
-  const activeConversationId = useConversationStore((s) => s.activeConversationId);
-  const createConversation = useConversationStore((s) => s.createConversation);
-  const deleteConversation = useConversationStore((s) => s.deleteConversation);
-  const setActiveConversation = useConversationStore((s) => s.setActiveConversation);
-  const addMessageToConversation = useConversationStore((s) => s.addMessageToConversation);
-  const updateLastMessageContent = useConversationStore((s) => s.updateLastMessageContent);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -59,83 +78,23 @@ export function ChatPanel({ width }: ChatPanelProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [selectedRefs, setSelectedRefs] = useState<SelectedRef[]>([]);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const isAtBottomRef = useRef(true);
 
   const initialAnswerMode: AnswerMode = chatMode === "agent" ? "agent" : "rag";
   const [answerMode, setAnswerMode] = useState<AnswerMode>(initialAnswerMode);
   const [availableAnswerModes, setAvailableAnswerModes] = useState<AnswerMode[]>(["rag"]);
   const [availableDataSources, setAvailableDataSources] = useState<DataSource[]>(["local"]);
 
-  const markdownComponents = useMemo(() => ({
-    code({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { className?: string; children?: React.ReactNode }) {
-      const match = /language-(\w+)/.exec(className || "");
-      const inline = !match && (!className || !String(children).includes("\n"));
-      if (inline) {
-        return <code className="bg-[var(--color-surface-hover)] px-1 py-0.5 rounded text-[11px]" {...props}>{children}</code>;
+  function handleToggleSourceExpand(msgId: string) {
+    setExpandedSources((prev) => {
+      const next = new Set(prev);
+      if (next.has(msgId)) {
+        next.delete(msgId);
+      } else {
+        next.add(msgId);
       }
-      return (
-        <pre className="bg-[var(--color-surface-hover)] rounded p-2 overflow-x-auto my-1">
-          <code className="text-[11px]" {...props}>{children}</code>
-        </pre>
-      );
-    },
-    p({ children }: { children?: React.ReactNode }) {
-      return <p className="mb-1 last:mb-0">{children}</p>;
-    },
-    ul({ children }: { children?: React.ReactNode }) {
-      return <ul className="list-disc list-inside mb-1 space-y-0.5">{children}</ul>;
-    },
-    ol({ children }: { children?: React.ReactNode }) {
-      return <ol className="list-decimal list-inside mb-1 space-y-0.5">{children}</ol>;
-    },
-    li({ children }: { children?: React.ReactNode }) {
-      return <li className="text-xs">{children}</li>;
-    },
-    blockquote({ children }: { children?: React.ReactNode }) {
-      return <blockquote className="border-l-2 border-[var(--color-accent)]/50 pl-2 italic text-[var(--color-text-muted)] my-1">{children}</blockquote>;
-    },
-    a({ children, href }: { children?: React.ReactNode; href?: string }) {
-      return <a className="text-[var(--color-accent)] underline decoration-[var(--color-accent)]/30 hover:decoration-[var(--color-accent)]" href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
-    },
-    table({ children }: { children?: React.ReactNode }) {
-      return <div className="overflow-x-auto my-1"><table className="text-[11px] border-collapse border border-[var(--color-border)] w-full">{children}</table></div>;
-    },
-    th({ children }: { children?: React.ReactNode }) {
-      return <th className="border border-[var(--color-border)] px-2 py-1 bg-[var(--color-surface-hover)] text-left">{children}</th>;
-    },
-    td({ children }: { children?: React.ReactNode }) {
-      return <td className="border border-[var(--color-border)] px-2 py-1">{children}</td>;
-    },
-    hr() {
-      return <hr className="border-[var(--color-border)] my-2" />;
-    },
-    h1({ children }: { children?: React.ReactNode }) {
-      return <h1 className="text-sm font-bold mt-2 mb-1">{children}</h1>;
-    },
-    h2({ children }: { children?: React.ReactNode }) {
-      return <h2 className="text-xs font-bold mt-1.5 mb-1">{children}</h2>;
-    },
-    h3({ children }: { children?: React.ReactNode }) {
-      return <h3 className="text-xs font-semibold mt-1 mb-0.5">{children}</h3>;
-    },
-    img({ src, alt }: { src?: string; alt?: string }) {
-      if (!src) return null;
-      return (
-        <div className="flex justify-center my-2">
-          <img
-            src={src}
-            alt={alt || ""}
-            className="rounded-md cursor-zoom-in border border-[var(--color-border)] transition-transform hover:scale-[1.02] hover:shadow-md"
-            style={{ maxWidth: "100%", maxHeight: "360px", objectFit: "contain" }}
-            onClick={(e) => { e.stopPropagation(); setZoomedImage(src); }}
-            loading="lazy"
-          />
-        </div>
-      );
-    },
-  }), [setZoomedImage]);
+      return next;
+    });
+  }
 
   useEffect(() => {
     const sources: DataSource[] = ["local"];
@@ -206,38 +165,25 @@ export function ChatPanel({ width }: ChatPanelProps) {
     setChatMode(deriveChatMode(am, ds));
   }
 
-  const throttleTimerRef = useRef<number | null>(null);
-  const pendingUpdateRef = useRef<{ msgId: string; content: string; convId: string } | null>(null);
+  const { currentRequestIdRef, throttledUpdate, flushPending, cancelStream } = useChatStreaming(
+    (msgId, content, convId) => {
+      updateMessageInConversation(convId, msgId, content);
+      updateLastMessageContent(convId, content);
+    },
+  );
 
-  function throttledUpdate(msgId: string, content: string, convId: string) {
-    if (throttleTimerRef.current) {
-      pendingUpdateRef.current = { msgId, content, convId };
-      return;
-    }
-    updateChatMessage(msgId, content);
-    updateLastMessageContent(convId, content);
-    throttleTimerRef.current = window.setTimeout(() => {
-      throttleTimerRef.current = null;
-      const pending = pendingUpdateRef.current;
-      if (pending) {
-        pendingUpdateRef.current = null;
-        updateChatMessage(pending.msgId, pending.content);
-        updateLastMessageContent(pending.convId, pending.content);
-      }
-    }, 80);
-  }
+  const genRef = useRef(0);
+  const agentCancelRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    if (isAtBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "instant" });
-    }
-  }, [chatMessages]);
-
-  function handleScrollContainer() {
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-  }
+  const handleCancel = useCallback(async () => {
+    const cancelGen = genRef.current;
+    await cancelStream();
+    if (genRef.current !== cancelGen) return;
+    agentCancelRef.current?.();
+    agentCancelRef.current = null;
+    setLoading(false);
+    setStreamingMsgId(null);
+  }, [cancelStream]);
 
   function setAnswerModeAndSync(am: AnswerMode) {
     setAnswerMode(am);
@@ -249,13 +195,20 @@ export function ChatPanel({ width }: ChatPanelProps) {
     syncModesToStore(answerMode, ds);
   }
 
-  async function sendMessage() {
-    const text = input.trim();
+  async function sendMessage(overrideText?: string, overrideDataSource?: DataSource) {
+    const text = (overrideText || input).trim();
     if (!text || loading) return;
 
-    setInput("");
+    // 如果指定了覆盖数据源，立即应用
+    const effectiveDataSource = overrideDataSource || dataSource;
+    if (overrideDataSource) {
+      setDataSource(overrideDataSource);
+    }
+    const effectiveChatMode = deriveChatMode(answerMode, effectiveDataSource);
+
+    if (!overrideText) setInput("");
     setLoading(true);
-    isAtBottomRef.current = true;
+    const currentGen = ++genRef.current;
 
     const convId = activeConversationId || createConversation(text.slice(0, 50));
 
@@ -266,7 +219,6 @@ export function ChatPanel({ width }: ChatPanelProps) {
       sources: [],
       timestamp: Date.now(),
     };
-    addChatMessage(userMsg);
     addMessageToConversation(convId, userMsg);
 
     const assistantId = crypto.randomUUID();
@@ -277,7 +229,6 @@ export function ChatPanel({ width }: ChatPanelProps) {
       sources: [],
       timestamp: Date.now(),
     };
-    addChatMessage(assistantMsg);
     addMessageToConversation(convId, assistantMsg);
 
     setStreamingMsgId(assistantId);
@@ -291,13 +242,14 @@ export function ChatPanel({ width }: ChatPanelProps) {
       }
 
       console.log(
-        `[sendMessage] chatMode="${chatMode}" dataSource="${dataSource}" answerMode="${answerMode}" contextTarget=`,
+        `[sendMessage] chatMode="${effectiveChatMode}" dataSource="${effectiveDataSource}" answerMode="${answerMode}" contextTarget=`,
         contextTarget
       );
 
-      if (chatMode === "agent") {
+      if (effectiveChatMode === "agent") {
         if (answerMode === "agent_rag") {
           const requestId = crypto.randomUUID();
+          currentRequestIdRef.current = requestId;
           const eventName = `agent-rag-${requestId}`;
 
           const { embeddingConfig } = useSettingsStore.getState();
@@ -307,26 +259,34 @@ export function ChatPanel({ width }: ChatPanelProps) {
 
           let unlisten: UnlistenFn | undefined;
           let fullText = "";
+          let cancelled = false;
           let resolveDone: (() => void) | undefined;
           const donePromise = new Promise<void>((resolve) => {
             resolveDone = resolve;
           });
 
+          agentCancelRef.current = () => {
+            cancelled = true;
+            resolveDone?.();
+          };
+
           try {
             unlisten = await listen<AgentRagStepEvent>(eventName, (event) => {
+              if (cancelled) return;
               const evt = event.payload;
 
               if (evt.step_type === "token" && evt.token) {
                 fullText += evt.token;
-                updateChatMessage(assistantId, fullText);
+                updateMessageInConversation(convId, assistantId, fullText);
                 updateLastMessageContent(convId, fullText);
               }
               if (evt.step_type === "done") {
                 if (evt.answer) {
-                  updateChatMessage(assistantId, evt.answer);
+                  updateMessageInConversation(convId, assistantId, evt.answer);
                   updateLastMessageContent(convId, evt.answer);
                 } else {
-                  updateChatMessage(
+                  updateMessageInConversation(
+                    convId,
                     assistantId,
                     "Agent RAG 完成了思考，但没有产生回答。",
                   );
@@ -346,12 +306,13 @@ export function ChatPanel({ width }: ChatPanelProps) {
                       chunkLength: s.chunk_length,
                     }),
                   );
-                  updateChatMessageSources(assistantId, msgs);
+                  updateMessageSourcesInConversation(convId, assistantId, msgs);
                 }
                 resolveDone?.();
               }
               if (evt.step_type === "error") {
-                updateChatMessage(
+                updateMessageInConversation(
+                  convId,
                   assistantId,
                   `Agent RAG 错误: ${evt.message}`,
                 );
@@ -374,22 +335,26 @@ export function ChatPanel({ width }: ChatPanelProps) {
             await donePromise;
           } catch (e) {
             const errMsg = `Agent RAG 错误: ${e}`;
-            updateChatMessage(assistantId, errMsg);
+            updateMessageInConversation(convId, assistantId, errMsg);
             updateLastMessageContent(convId, errMsg);
           } finally {
+            agentCancelRef.current = null;
+            currentRequestIdRef.current = null;
             if (unlisten) unlisten();
           }
 
-          setLoading(false);
-          setStreamingMsgId(null);
+          if (genRef.current === currentGen) {
+            setLoading(false);
+            setStreamingMsgId(null);
+          }
           return;
         }
 
         let augmentedQuery = text;
         const agentSources: MessageSource[] = [];
 
-        if (dataSource !== "local" && dataSource !== "online") {
-          const tool = extensions.customSearches.find((s) => s.id === dataSource);
+        if (effectiveDataSource !== "local" && effectiveDataSource !== "online") {
+          const tool = extensions.customSearches.find((s) => s.id === effectiveDataSource);
           if (tool) {
             try {
               const resp = await fetch(tool.url, {
@@ -427,16 +392,17 @@ export function ChatPanel({ width }: ChatPanelProps) {
           }
         }
 
+        currentRequestIdRef.current = null;
         try {
           const result = await commands.agentDeepResearch(augmentedQuery);
           const resultStr = typeof result === "string"
             ? result
             : JSON.stringify(result, null, 2);
-          updateChatMessage(assistantId, resultStr);
+          updateMessageInConversation(convId, assistantId, resultStr);
           updateLastMessageContent(convId, resultStr);
 
           if (agentSources.length > 0) {
-            updateChatMessageSources(assistantId, agentSources);
+            updateMessageSourcesInConversation(convId, assistantId, agentSources);
           } else if (typeof result === "object" && result !== null) {
             const resultObj = result as Record<string, unknown>;
             if (Array.isArray(resultObj.sources)) {
@@ -448,20 +414,22 @@ export function ChatPanel({ width }: ChatPanelProps) {
                 chunkOffset: 0,
                 chunkLength: 0,
               }));
-              updateChatMessageSources(assistantId, parsedSources);
+              updateMessageSourcesInConversation(convId, assistantId, parsedSources);
             }
           }
         } catch (e) {
           const errMsg = `Agent 错误: ${e}\n\n请确保 Agent 已启动（设置 -> AI Agent -> 启动 Agent）。`;
-          updateChatMessage(assistantId, errMsg);
+          updateMessageInConversation(convId, assistantId, errMsg);
           updateLastMessageContent(convId, errMsg);
         }
-        setLoading(false);
-        setStreamingMsgId(null);
+        if (genRef.current === currentGen) {
+          setLoading(false);
+          setStreamingMsgId(null);
+        }
         return;
       }
 
-      if (chatMode === "knowledge") {
+      if (effectiveChatMode === "knowledge") {
         const kbConfig = loadConfig();
         if (!kbConfig.endpoint.trim()) {
           contexts.push("[提示] 知识库服务未配置（设置 -> 知识库）。");
@@ -581,7 +549,7 @@ export function ChatPanel({ width }: ChatPanelProps) {
             contexts.push(`[知识库检索失败] ${String(e).slice(0, 300)}`);
           }
         }
-      } else if (chatMode === "local") {
+      } else if (effectiveChatMode === "local") {
 
         if (contextTarget.type === "file" && currentNoteContent) {
           const title = currentNotePath?.split("/").pop() || "";
@@ -594,6 +562,12 @@ export function ChatPanel({ width }: ChatPanelProps) {
             chunkOffset: 0,
             chunkLength: 0,
           });
+        }
+
+        // 股票分析上下文
+        if (contextTarget.type === "stock" && contextTarget.stockCode) {
+          const stockCtx = `[股票分析: ${contextTarget.stockName || contextTarget.stockCode} (${contextTarget.stockMarket?.toUpperCase()}${contextTarget.stockCode})]\n请对该股票进行深度技术分析和基本面分析。`;
+          contexts.push(stockCtx);
         }
 
         if (selectedRefs.length > 0 && vaultPath) {
@@ -660,7 +634,9 @@ export function ChatPanel({ width }: ChatPanelProps) {
             const results = await commands.multiSearch(text, 5, embedConfig, folderFilter);
             if (results.length > 0) {
               for (const r of results) {
-                contexts.push(`[${r.note_title}]\n${r.text}`);
+                const scorePct = (r.score * 100).toFixed(0);
+                const header = r.note_title ? `${r.note_title} (${scorePct}%)` : `来源 (${scorePct}%)`;
+                contexts.push(`## 📄 ${header}\n\n${r.text}`);
                 sources.push({
                   noteTitle: r.note_title,
                   notePath: r.note_id,
@@ -672,20 +648,20 @@ export function ChatPanel({ width }: ChatPanelProps) {
                 });
               }
             } else {
-              contexts.push("[提示] 本地文件中暂未找到直接相关的内容，请尝试换个问法或确认相关笔记已存在。\n\n建议：请确保已完成文件索引（设置 -> 重建索引），且向量化模型服务（如 Ollama）已正常运行。");
+              contexts.push("> 本地文件中暂未找到直接相关的内容，请尝试换个问法或确认相关笔记已存在。\n\n建议：请确保已完成文件索引（设置 → 重建索引），且向量化模型服务已正常运行。");
             }
           } catch (e) {
             const errStr = String(e).slice(0, 200);
-            contexts.push(`[提示] 多路检索失败(${errStr})。\n\n请检查：\n1. 设置中是否已配置向量化模型\n2. Ollama 服务是否正在运行\n3. 是否已构建文件索引`);
+            contexts.push(`> 多路检索失败(${errStr})。\n\n请检查：\n1. 设置中是否已配置向量化模型\n2. 向量化模型服务是否正在运行\n3. 是否已构建文件索引`);
             if (currentNoteContent && currentNotePath) {
               const title = currentNotePath.split("/").pop() || "";
               contexts.push(`[当前打开的笔记: ${title}]\n${currentNoteContent.slice(0, 2000)}`);
             }
           }
         }
-      } else if (chatMode === "online") {
-        if (dataSource !== "local" && dataSource !== "online") {
-          const cs = extensions.customSearches.find((s) => s.id === dataSource);
+      } else if (effectiveChatMode === "online") {
+        if (effectiveDataSource !== "local" && effectiveDataSource !== "online") {
+          const cs = extensions.customSearches.find((s) => s.id === effectiveDataSource);
           if (cs) {
             try {
               const resp = await fetch(cs.url, {
@@ -751,49 +727,68 @@ export function ChatPanel({ width }: ChatPanelProps) {
       }
       const dedupedSources = Array.from(seenSources.values());
 
-      updateChatMessageSources(assistantId, dedupedSources);
+      updateMessageSourcesInConversation(convId, assistantId, dedupedSources);
 
       const requestId = crypto.randomUUID();
+      currentRequestIdRef.current = requestId;
       const eventName = `chat-stream-${requestId}`;
       let fullContent = "";
+      let chunkCount = 0;
       let unlisten: UnlistenFn | null = null;
+
+      console.log(`[ChatPanel] stream start requestId=${requestId} contexts=${contexts.length} model=${activeLlmConfig?.modelId}`);
 
       try {
         unlisten = await listen<StreamChunk>(eventName, (event) => {
           const chunk = event.payload;
+          chunkCount++;
+          if (chunk.content) {
+            fullContent += chunk.content;
+            throttledUpdate(assistantId, fullContent, convId);
+          }
           if (chunk.done) {
             return;
           }
-          fullContent += chunk.content;
-          throttledUpdate(assistantId, fullContent, convId);
         });
 
         await commands.modelChatStream(text, contexts, activeLlmConfig, requestId);
+        console.log(`[ChatPanel] stream end requestId=${requestId} chunkCount=${chunkCount} contentLen=${fullContent.length}`);
       } finally {
         if (unlisten) unlisten();
       }
 
-      if (throttleTimerRef.current) {
-        clearTimeout(throttleTimerRef.current);
-        throttleTimerRef.current = null;
-        pendingUpdateRef.current = null;
+      if (genRef.current === currentGen) {
+        flushPending();
+        if (!fullContent) {
+          console.warn(`[ChatPanel] stream empty requestId=${requestId} chunkCount=${chunkCount} model=${activeLlmConfig?.modelId}`);
+        }
+        if (fullContent.startsWith("错误") || fullContent.startsWith("API") || fullContent.startsWith("模型调用失败") || fullContent.startsWith("Ollama") || fullContent.startsWith("智谱")) {
+          console.error(`[ChatPanel] stream error: ${fullContent.slice(0, 200)}`);
+        }
+        const finalContent = fullContent || "模型未返回任何内容，请检查：\n1. 模型 API 地址和密钥是否配置正确\n2. 模型服务是否正常运行\n3. 网络连接是否正常\n\n可打开浏览器开发者工具 (F12) 查看 Console 中的详细错误日志。";
+        updateMessageInConversation(convId, assistantId, finalContent);
+        updateLastMessageContent(convId, finalContent);
       }
-      updateChatMessage(assistantId, fullContent);
-      updateLastMessageContent(convId, fullContent);
     } catch (e) {
+      console.error(`[ChatPanel] sendMessage error:`, e);
       const errMsg = `错误: ${e}\n\n请检查模型配置是否正确，并确保服务已启动。`;
-      updateChatMessage(assistantId, errMsg);
+      updateMessageInConversation(convId, assistantId, errMsg);
       updateLastMessageContent(convId, errMsg);
     } finally {
-      setLoading(false);
-      setStreamingMsgId(null);
+      if (genRef.current === currentGen) {
+        setLoading(false);
+        setStreamingMsgId(null);
+        currentRequestIdRef.current = null;
+      }
     }
   }
 
   async function handleRegenerate(msgId: string) {
     if (loading) return;
 
-    const msgs = useAppStore.getState().chatMessages;
+    const state = useConversationStore.getState();
+    const currentConv = state.conversations.find((c) => c.id === state.activeConversationId);
+    const msgs = currentConv?.messages ?? [];
     const msgIndex = msgs.findIndex((m) => m.id === msgId);
     if (msgIndex < 1) return;
 
@@ -805,7 +800,7 @@ export function ChatPanel({ width }: ChatPanelProps) {
     const userMsg = msgs[userMsgIndex];
 
     setLoading(true);
-    isAtBottomRef.current = true;
+    const currentRegenGen = ++genRef.current;
 
     const newAssistantId = crypto.randomUUID();
     const newAssistantMsg: ChatMessage = {
@@ -815,7 +810,6 @@ export function ChatPanel({ width }: ChatPanelProps) {
       sources: [],
       timestamp: Date.now(),
     };
-    addChatMessage(newAssistantMsg);
     if (activeConversationId) {
       addMessageToConversation(activeConversationId, newAssistantMsg);
     }
@@ -955,6 +949,12 @@ export function ChatPanel({ width }: ChatPanelProps) {
             chunkOffset: 0,
             chunkLength: 0,
           });
+        }
+
+        // 股票分析上下文
+        if (contextTarget.type === "stock" && contextTarget.stockCode) {
+          const stockCtx = `[股票分析: ${contextTarget.stockName || contextTarget.stockCode} (${contextTarget.stockMarket?.toUpperCase()}${contextTarget.stockCode})]\n请对该股票进行深度技术分析和基本面分析。`;
+          contexts.push(stockCtx);
         }
 
         if (selectedRefs.length > 0 && vaultPath) {
@@ -1108,9 +1108,10 @@ export function ChatPanel({ width }: ChatPanelProps) {
       }
       const dedupedSources = Array.from(seenSources.values());
 
-      updateChatMessageSources(newAssistantId, dedupedSources);
+      updateMessageSourcesInConversation(activeConversationId || "", newAssistantId, dedupedSources);
 
       const requestId = crypto.randomUUID();
+      currentRequestIdRef.current = requestId;
       const eventName = `chat-stream-${requestId}`;
       let fullContent = "";
       let unlisten: UnlistenFn | null = null;
@@ -1118,9 +1119,11 @@ export function ChatPanel({ width }: ChatPanelProps) {
       try {
         unlisten = await listen<StreamChunk>(eventName, (event) => {
           const chunk = event.payload;
+          if (chunk.content) {
+            fullContent += chunk.content;
+            throttledUpdate(newAssistantId, fullContent, activeConversationId || "");
+          }
           if (chunk.done) return;
-          fullContent += chunk.content;
-          throttledUpdate(newAssistantId, fullContent, activeConversationId || "");
         });
 
         await commands.modelChatStream(userMsg.content, contexts, activeLlmConfig, requestId);
@@ -1128,20 +1131,22 @@ export function ChatPanel({ width }: ChatPanelProps) {
         if (unlisten) unlisten();
       }
 
-      if (throttleTimerRef.current) {
-        clearTimeout(throttleTimerRef.current);
-        throttleTimerRef.current = null;
-        pendingUpdateRef.current = null;
+      if (genRef.current === currentRegenGen) {
+        flushPending();
+        const finalContent = fullContent || "模型未返回任何内容，请检查模型配置或重试。";
+        updateMessageInConversation(activeConversationId || "", newAssistantId, finalContent);
+        updateLastMessageContent(activeConversationId || "", finalContent);
       }
-      updateChatMessage(newAssistantId, fullContent);
-      updateLastMessageContent(activeConversationId || "", fullContent);
     } catch (e) {
       const errMsg = `重新生成失败: ${e}`;
-      updateChatMessage(newAssistantId, errMsg);
+      updateMessageInConversation(activeConversationId || "", newAssistantId, errMsg);
       updateLastMessageContent(activeConversationId || "", errMsg);
     } finally {
-      setLoading(false);
-      setStreamingMsgId(null);
+      if (genRef.current === currentRegenGen) {
+        setLoading(false);
+        setStreamingMsgId(null);
+        currentRequestIdRef.current = null;
+      }
     }
   }
 
@@ -1166,7 +1171,7 @@ export function ChatPanel({ width }: ChatPanelProps) {
     const msg = chatMessages.find((m) => m.id === msgId);
     if (!msg) return;
     const next = msg.feedback === type ? null : type;
-    updateChatMessageFeedback(msgId, next);
+    updateMessageFeedbackInConversation(activeConversationId || "", msgId, next);
   }
 
   async function handleShare(msg: ChatMessage) {
@@ -1195,16 +1200,10 @@ export function ChatPanel({ width }: ChatPanelProps) {
 
   async function handleSelectConversation(id: string) {
     setActiveConversation(id);
-    const conv = conversations.find((c) => c.id === id);
-    if (conv) {
-      clearChat();
-      conv.messages.forEach((m) => addChatMessage(m));
-    }
     setShowHistory(false);
   }
 
   async function handleNewConversation() {
-    clearChat();
     setActiveConversation(null);
     createConversation("");
     setShowHistory(false);
@@ -1213,15 +1212,24 @@ export function ChatPanel({ width }: ChatPanelProps) {
   async function handleDeleteConversation(id: string) {
     deleteConversation(id);
     if (activeConversationId === id) {
-      clearChat();
       setActiveConversation(null);
     }
   }
 
   function openNote(notePath: string, chunkText?: string, chunkOffset?: number, chunkLength?: number) {
+    // 网络链接在浏览器中打开
+    if (notePath.startsWith("http://") || notePath.startsWith("https://")) {
+      window.open(notePath, "_blank");
+      return;
+    }
     const vaultPath = useAppStore.getState().vaultPath;
     if (!vaultPath) return;
-    const fullPath = `${vaultPath}/${notePath}`;
+    let fullPath: string;
+    if (notePath.startsWith("/") || notePath.startsWith(vaultPath)) {
+      fullPath = notePath;
+    } else {
+      fullPath = `${vaultPath}/${notePath}`;
+    }
     commands.readFile(fullPath).then((content) => {
       useAppStore.getState().setCurrentNote(fullPath, content);
       if (chunkText && chunkOffset !== undefined && chunkLength !== undefined) {
@@ -1232,148 +1240,6 @@ export function ChatPanel({ width }: ChatPanelProps) {
     }).catch(console.error);
   }
 
-  function MessageContent({ msg }: { msg: ChatMessage }) {
-    if (!msg.content) {
-      return <span className="italic text-[var(--color-text-muted)]">思考中...</span>;
-    }
-    if (msg.role === "user") {
-      return <div className="whitespace-pre-wrap break-words">{msg.content}</div>;
-    }
-    try {
-      return (
-        <div className="prose prose-xs max-w-none text-xs text-[var(--color-text-primary)] break-words">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-            {msg.content}
-          </ReactMarkdown>
-        </div>
-      );
-    } catch {
-      return <div className="whitespace-pre-wrap break-words">{msg.content}</div>;
-    }
-  }
-
-  function ActionBar({ msg }: { msg: ChatMessage }) {
-    if (msg.role !== "assistant" || !msg.content) return null;
-
-    return (
-      <div className="flex items-center gap-0.5 mt-2 pt-1.5 border-t border-[var(--color-border)]/30">
-        <button
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors"
-          onClick={() => handleCopy(msg)}
-          title="复制"
-        >
-          {copiedId === msg.id ? "✅" : "📋"}
-          <span>{copiedId === msg.id ? "已复制" : "复制"}</span>
-        </button>
-        <button
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors"
-          onClick={() => handleRegenerate(msg.id)}
-          disabled={loading}
-          title="重新生成"
-        >
-          🔄
-          <span>刷新</span>
-        </button>
-        <button
-          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-            msg.feedback === "like"
-              ? "text-green-500 bg-green-500/10"
-              : "text-[var(--color-text-muted)] hover:text-green-500 hover:bg-green-500/5"
-          }`}
-          onClick={() => handleFeedback(msg.id, "like")}
-          title="点赞"
-        >
-          👍
-        </button>
-        <button
-          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-            msg.feedback === "dislike"
-              ? "text-orange-500 bg-orange-500/10"
-              : "text-[var(--color-text-muted)] hover:text-orange-500 hover:bg-orange-500/5"
-          }`}
-          onClick={() => handleFeedback(msg.id, "dislike")}
-          title="踩"
-        >
-          👎
-        </button>
-        <button
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors ml-auto"
-          onClick={() => handleShare(msg)}
-          title="分享"
-        >
-          {copiedId === msg.id ? "✅" : "📤"}
-          <span>{copiedId === msg.id ? "已复制" : "分享"}</span>
-        </button>
-      </div>
-    );
-  }
-
-  function SourceBar({ msg }: { msg: ChatMessage }) {
-    if (msg.role !== "assistant" || msg.sources.length === 0) return null;
-
-    const isExpanded = expandedSources.has(msg.id);
-    const hasMore = msg.sources.length > 5;
-    const visibleSources = isExpanded ? msg.sources : msg.sources.slice(0, 5);
-
-    function toggleExpand() {
-      setExpandedSources((prev) => {
-        const next = new Set(prev);
-        if (isExpanded) {
-          next.delete(msg.id);
-        } else {
-          next.add(msg.id);
-        }
-        return next;
-      });
-    }
-
-    return (
-      <div className="mt-1.5 pt-1.5 border-t border-[var(--color-border)]/30">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] text-[var(--color-text-muted)] font-medium">
-            📚 参考来源
-          </span>
-          {hasMore && (
-            <button
-              className="text-[10px] text-[var(--color-accent)] hover:underline"
-              onClick={toggleExpand}
-            >
-              {isExpanded ? "收起" : `更多 (${msg.sources.length})`}
-            </button>
-          )}
-        </div>
-        <div className="space-y-1">
-          {visibleSources.map((source, i) => (
-            <button
-              key={`${source.notePath}-${i}`}
-              className="w-full text-left px-1.5 py-1 rounded text-[10px] hover:bg-[var(--color-surface-hover)] transition-colors group"
-              onClick={() => openNote(source.notePath, source.chunkText, source.chunkOffset, source.chunkLength)}
-              title={`打开: ${source.noteTitle}`}
-            >
-              <div className="flex items-center gap-1">
-                <span className="shrink-0 text-[var(--color-accent)] font-medium tabular-nums">[{i + 1}]</span>
-                <span className="shrink-0">📄</span>
-                <span className="truncate text-[var(--color-text-primary)] group-hover:text-[var(--color-accent)] transition-colors">
-                  {source.noteTitle}
-                </span>
-                {source.score > 0 && (
-                  <span className="shrink-0 text-[var(--color-text-muted)] ml-auto">
-                    {source.score <= 1 ? `${Math.round(source.score * 100)}%` : `${Math.round(source.score)}`}
-                  </span>
-                )}
-              </div>
-              {source.snippet && (
-                <p className="text-[var(--color-text-muted)] truncate mt-0.5 ml-5">
-                  {source.snippet}
-                </p>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
   const isKnowledgeContext = dataSource === "knowledge" || !!contextTarget.kbId || !!contextTarget.category || !!contextTarget.docId;
 
       return (
@@ -1382,52 +1248,46 @@ export function ChatPanel({ width }: ChatPanelProps) {
         className="flex flex-col bg-[var(--color-surface-secondary)] border-l border-[var(--color-border)] shrink-0 relative"
         style={{ width }}
       >
-      <div className="flex items-center justify-between px-3 h-10 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0">
-        <div className="flex items-center gap-1.5 text-xs">
-          <span className="text-[var(--color-text-muted)]">范围:</span>
-          <span className={`font-medium ${
-            contextTarget.type === "all"
-              ? "text-[var(--color-text-primary)]"
-              : "text-[var(--color-accent)]"
-          }`}>
-            {contextTarget.type === "all" && (isKnowledgeContext ? "📚 全部知识库" : "🔍 全部文件")}
-            {contextTarget.type === "folder" && `📁 ${contextTarget.label}`}
-            {contextTarget.type === "file" && `📄 ${contextTarget.label}`}
-          </span>
+      {/* 顶部栏 - 简洁，只显示范围 */}
+      <div className="flex items-center px-3 h-10 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0">
+        <div className="flex items-center gap-1.5 text-xs flex-1 min-w-0">
+          {contextTarget.type === "stock" && dataSource === "online" ? (
+            <>
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-500 font-medium text-[11px]">
+                <span className="inline-flex items-center"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM5.2 13.2A5.5 5.5 0 013.7 8.5h2a9 9 0 00.5 2.7 5.5 5.5 0 00-1 2zm5.6 0a5.5 5.5 0 01-1-2 9 9 0 00.5-2.7h2a5.5 5.5 0 01-1.5 4.7zM8 14c-.5 0-1.2-.8-1.6-2.1a7.5 7.5 0 01-.4-1.9h4a7.5 7.5 0 01-.4 1.9C9.2 13.2 8.5 14 8 14zm-2.5-5a7.5 7.5 0 01.4-1.9C6.3 5.8 7 5 7.5 5h1c.5 0 1.2.8 1.6 2.1.2.6.3 1.2.4 1.9h-5zm5.3 0h-2a9 9 0 00-.5-2.7 5.5 5.5 0 011-2A5.5 5.5 0 0113.3 8.5h-2.5zm-7.6 0H3.2a5.5 5.5 0 012.6-4.7 5.5 5.5 0 011 2A9 9 0 006.2 8.5z" /></svg></span>
+                <span className="truncate max-w-[140px]">{contextTarget.label}</span>
+              </span>
+              <span className="text-[10px] text-[var(--color-text-muted)]">联网分析</span>
+            </>
+          ) : (
+            <span className={`font-medium truncate ${
+              contextTarget.type === "all"
+                ? "text-[var(--color-text-muted)]"
+                : "text-[var(--color-accent)]"
+            }`}>
+              {contextTarget.type === "all" && (isKnowledgeContext ? <><IconKnowledge size={12} /> 全部知识库</> : <><IconSearch size={12} /> 全部文件</>)}
+              {contextTarget.type === "folder" && <><IconFolder size={12} /> {contextTarget.label}</>}
+              {contextTarget.type === "file" && <><IconFile size={12} /> {contextTarget.label}</>}
+              {contextTarget.type === "stock" && <><IconLetterStock size={12} /> {contextTarget.label}</>}
+            </span>
+          )}
           {contextTarget.type !== "all" && (
             <button
-              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+              className="icon-btn icon-btn-sm shrink-0"
               onClick={() => setContextTarget({ type: "all", label: isKnowledgeContext ? "全部知识库" : "全部文件" })}
-              title={`重置为${isKnowledgeContext ? "全部知识库" : "全部文件"}`}
+              title="重置范围"
             >
-              ✕ 重置
+              <IconClose size={10} />
             </button>
           )}
         </div>
-
-        <div className="flex items-center gap-1">
-          <button
-            className="btn btn-ghost px-1.5 text-xs"
-            onClick={() => setShowHistory(!showHistory)}
-            title="历史记录"
-          >
-            📋
-          </button>
-          <button
-            className="btn btn-ghost px-1.5 text-xs"
-            onClick={clearChat}
-            title="清空对话"
-          >
-            🗑
-          </button>
-          <button
-            className="btn btn-ghost px-1.5 text-xs"
-            onClick={toggleChat}
-            title="关闭"
-          >
-            ✕
-          </button>
-        </div>
+        <button
+          className="icon-btn icon-btn-sm shrink-0"
+          onClick={() => toggleMaximizePanel("chat")}
+          title={maximizedPanel === "chat" ? "还原 (Ctrl+Shift+M)" : "最大化 (Ctrl+Shift+M)"}
+        >
+          {maximizedPanel === "chat" ? <IconWindowRestore size={10} /> : <IconWindowMaximize size={10} />}
+        </button>
       </div>
 
       {showHistory && (
@@ -1437,10 +1297,10 @@ export function ChatPanel({ width }: ChatPanelProps) {
               对话历史
             </span>
             <button
-              className="btn btn-ghost text-xs py-0.5 px-2"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
               onClick={handleNewConversation}
             >
-              + 新对话
+              <IconAdd size={10} /> 新对话
             </button>
           </div>
           <div className="max-h-40 overflow-y-auto">
@@ -1465,14 +1325,14 @@ export function ChatPanel({ width }: ChatPanelProps) {
                       {conv.title || "新对话"}
                     </span>
                     <button
-                      className="btn btn-ghost px-1 text-[10px] ml-1"
+                      className="icon-btn icon-btn-sm ml-1"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDeleteConversation(conv.id);
                       }}
                       title="删除"
                     >
-                      ✕
+                      <IconClose size={8} />
                     </button>
                   </div>
                 ))
@@ -1481,100 +1341,31 @@ export function ChatPanel({ width }: ChatPanelProps) {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3" ref={scrollContainerRef} onScroll={handleScrollContainer}>
-        {chatMessages.length === 0 && (() => {
-            const scope = contextTarget.type === "folder"
-              ? `【${contextTarget.label}】`
-              : contextTarget.type === "file"
-              ? `【${contextTarget.label}】`
-              : "";
-
-            const title = isKnowledgeContext
-              ? scope ? `向知识库${scope}提问` : "向你的知识库提问"
-              : dataSource === "online"
-              ? scope ? `联网检索 ${scope}` : "向你的联网检索提问"
-              : scope ? `向本地文件${scope}提问` : "向你的本地文件提问";
-
-            const subtitle = answerMode === "rag"
-              ? dataSource === "online"
-                ? "Tavily 联网检索，AI 基于网络结果回答"
-                : isKnowledgeContext
-                ? "基于远程知识库检索增强回答"
-                : dataSource !== "local"
-                ? "检索工具，AI 调用外部检索接口获取知识"
-                : scope
-                ? `基于 RAG 检索增强回答，聚焦 ${contextTarget.label}`
-                : "基于 RAG 检索增强回答，从你的笔记中寻找答案"
-              : answerMode === "agent_rag"
-              ? "多策略 Agent RAG，智能选择检索与推理策略逐步回答"
-              : answerMode === "agent"
-              ? "启用 Agent Mode，AI 自主调用工具完成任务"
-              : "启用 UltraRAG Deep Research，AI 深度研究分析";
-
-            return (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <div className="text-3xl mb-3 opacity-60">🤖</div>
-            <div className="text-sm font-medium text-[var(--color-text-primary)] mb-1">
-              {title}
-            </div>
-            <div className="text-[11px] text-[var(--color-text-muted)] max-w-[200px]">
-              {subtitle}
-            </div>
-          </div>
-            );
-          })()}
-        {chatMessages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`text-xs ${
-              msg.role === "user"
-                ? "flex justify-end"
-                : "flex justify-start"
-            }`}
-          >
-            <div className={`max-w-[88%] ${
-              msg.role === "user" ? "" : "w-full"
-            }`}>
-              <div
-                className={`rounded-xl px-3 py-2.5 relative group ${
-                  msg.role === "user"
-                    ? "bg-[var(--color-accent)] text-white rounded-br-md"
-                    : "bg-[var(--color-surface)] border border-[var(--color-border)] rounded-bl-md"
-                }`}
-              >
-                <MessageContent msg={msg} />
-                {streamingMsgId === msg.id && (
-                  <span className="inline-block w-1.5 h-3 bg-[var(--color-accent)] animate-pulse ml-0.5 align-middle rounded-sm" />
-                )}
-                {msg.role === "user" && msg.content && (
-                  <button
-                    className="absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded text-white/60 hover:text-white hover:bg-white/10"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleCopy(msg);
-                    }}
-                    title="复制"
-                  >
-                    {copiedId === msg.id ? (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                    ) : (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
-                    )}
-                  </button>
-                )}
-              </div>
-              <SourceBar msg={msg} />
-              <ActionBar msg={msg} />
-            </div>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
+      <ChatMessageList
+        chatMessages={chatMessages}
+        streamingMsgId={streamingMsgId}
+        expandedSources={expandedSources}
+        onToggleSourceExpand={handleToggleSourceExpand}
+        onOpenNote={openNote}
+        onCopy={handleCopy}
+        onRegenerate={handleRegenerate}
+        onFeedback={handleFeedback}
+        onShare={handleShare}
+        copiedId={copiedId}
+        loading={loading}
+        onZoomImage={setZoomedImage}
+        contextLabel={contextTarget.type !== "all" ? contextTarget.label : ""}
+        answerMode={answerMode}
+        dataSource={dataSource}
+        isKnowledgeContext={isKnowledgeContext}
+        zoomedImage={zoomedImage}
+      />
 
       <ChatInputArea
         value={input}
         onChange={setInput}
         onSend={sendMessage}
+        onCancel={handleCancel}
         loading={loading}
         answerMode={answerMode}
         dataSource={dataSource}
@@ -1586,26 +1377,49 @@ export function ChatPanel({ width }: ChatPanelProps) {
         availableAnswerModes={availableAnswerModes}
         availableDataSources={availableDataSources}
       />
-      </aside>
-      {zoomedImage && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 cursor-zoom-out"
-          onClick={() => setZoomedImage(null)}
+
+      {/* 底部工具栏 - 操作按钮在左下角 */}
+      <div className="flex items-center gap-0.5 px-2 h-8 border-t border-[var(--color-border)] bg-[var(--color-surface)] shrink-0">
+        <button
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
+          onClick={() => setShowHistory(!showHistory)}
+          title="历史记录"
         >
-          <img
-            src={zoomedImage}
-            alt=""
-            className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl"
-          />
+          <IconHistory size={12} /> 历史
+        </button>
+        <button
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
+          onClick={handleNewConversation}
+          title="新对话"
+        >
+          <IconAdd size={12} /> 新对话
+        </button>
+        <button
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
+          onClick={() => useAppStore.getState().showEditor()}
+          title="切换到编辑器"
+        >
+          <IconFile size={12} /> 文档
+        </button>
+        {hasStockTarget && (
           <button
-            className="absolute top-4 right-4 text-white/70 hover:text-white text-2xl w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors"
-            onClick={() => setZoomedImage(null)}
-            aria-label="关闭"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
+            onClick={() => useAppStore.getState().showStock()}
+            title="切换到股票详情"
           >
-            ✕
+            <IconLetterStock size={12} /> 股票
           </button>
-        </div>
-      )}
+        )}
+        <div className="flex-1" />
+        <button
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
+          onClick={toggleChat}
+          title="关闭面板"
+        >
+          收起 <IconClose size={10} />
+        </button>
+      </div>
+      </aside>
     </>
   );
 }

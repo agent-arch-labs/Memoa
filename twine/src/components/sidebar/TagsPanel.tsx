@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useTauriCommands } from "@/hooks/useTauriCommands";
+import { IconFile } from "@/components/common/Icons";
 import type { TagWithCount, NoteSummary } from "@/types";
 
 export function TagsPanel() {
@@ -10,6 +11,7 @@ export function TagsPanel() {
   const setContextTarget = useAppStore((s) => s.setContextTarget);
   const setDataSource = useAppStore((s) => s.setDataSource);
   const tagRefreshKey = useAppStore((s) => s.tagRefreshKey);
+  const saveCurrentNote = useAppStore((s) => s.saveCurrentNote);
 
   const [tags, setTags] = useState<TagWithCount[]>([]);
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -25,23 +27,16 @@ export function TagsPanel() {
     });
   }, [notes]);
 
-  useEffect(() => {
-    loadTags();
-    if (activeTag) {
-      loadNotesForTag(activeTag);
-    }
-  }, [tagRefreshKey]);
-
-  async function loadTags() {
+  const loadTags = useCallback(async () => {
     try {
       const result = await commands.listTagsWithCounts();
       setTags(result);
     } catch {
       console.error("加载标签失败");
     }
-  }
+  }, [commands]);
 
-  async function loadNotesForTag(tagId: string) {
+  const loadNotesForTag = useCallback(async (tagId: string) => {
     setLoading(true);
     try {
       const result = await commands.getNotesByTag(tagId);
@@ -51,17 +46,26 @@ export function TagsPanel() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [commands]);
+
+  useEffect(() => {
+    loadTags();
+  }, [loadTags, tagRefreshKey]);
+
+  useEffect(() => {
+    if (activeTag) {
+      loadNotesForTag(activeTag);
+    } else {
+      setNotes([]);
+    }
+  }, [activeTag, loadNotesForTag]);
 
   async function handleTagClick(tagId: string) {
     if (activeTag === tagId) {
       setActiveTag(null);
-      setNotes([]);
       return;
     }
     setActiveTag(tagId);
-    setNotes([]);
-    await loadNotesForTag(tagId);
   }
 
   async function handleNoteClick(note: NoteSummary) {
@@ -70,6 +74,7 @@ export function TagsPanel() {
         ? note.path
         : `${vaultPath}/${note.path}`;
       const content = await commands.readFile(fullPath);
+      await saveCurrentNote();
       setCurrentNote(fullPath, content);
       setDataSource("local");
       setContextTarget({
@@ -133,7 +138,7 @@ export function TagsPanel() {
                           onClick={() => handleNoteClick(note)}
                           title={note.path}
                         >
-                          <span className="text-xs mr-1 opacity-60">📄</span>
+                          <span className="text-xs mr-1 opacity-60"><IconFile size={10} /></span>
                           {note.title}
                         </button>
                       ))

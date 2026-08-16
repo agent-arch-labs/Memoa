@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTauriCommands } from "@/hooks/useTauriCommands";
 import type { AgentStatus, AgentToolInfo } from "@/types";
+import { IconLightning, IconSearch } from "@/components/common/Icons";
 
 const ULTRA_RAG_ROOT = "/home/zhen/works/Memoa/UltraRAG";
 const MEMOA_ROOT = "/home/zhen/works/Memoa";
@@ -175,11 +176,11 @@ export function AgentSettings() {
 
           <div className="flex gap-2">
             <button
-              className="btn btn-primary text-xs px-4 py-2"
+              className="btn btn-ghost text-xs px-4 py-2"
               disabled={loading || isRunning}
               onClick={handleStart}
             >
-              {loading ? "启动中..." : "启动 Agent"}
+              <IconLightning size={12} /> {loading ? "启动中..." : "启动 Agent"}
             </button>
             <button
               className="btn text-xs px-4 py-2"
@@ -251,11 +252,11 @@ export function AgentSettings() {
           </div>
           <div className="flex gap-2">
             <button
-              className="btn btn-primary text-xs px-3 py-2"
+              className="btn btn-ghost text-xs px-3 py-2"
               disabled={loading || !isRunning || !testQuery.trim()}
               onClick={handleDeepResearch}
             >
-              Deep Research
+              <IconSearch size={12} /> Deep Research
             </button>
             <button
               className="btn text-xs px-3 py-2"

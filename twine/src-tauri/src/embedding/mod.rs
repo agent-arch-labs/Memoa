@@ -1,21 +1,6 @@
-// 向量嵌入存储与检索
-//
-// 存储:
-//   - 向量块存储在仓库的 .memoa/vectors.json 中
-//   - JSON 数组格式，每项包含 note_id, chunk_index, text, vector 等字段
-//   - index_chunks: 追加新块 + 清理旧块
-//   - cleanup_note: 移除指定笔记的所有分块
-//
-// 检索:
-//   - search_similar_chunks: 余弦相似度排序取 top_k
-//   - 全量内存计算，适用于个人知识库规模 (千级笔记)
-
+use crate::db;
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkRecord {
@@ -43,23 +28,63 @@ pub struct SearchResult {
     pub chunk_length: u64,
 }
 
-fn index_file_path(vault_path: &Path) -> PathBuf {
-    AppConfig::memoa_config_dir(vault_path).join("vectors.json")
+pub fn ensure_table() -> AppResult<()> {
+    db::with_conn(|conn| {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS vector_chunks (
+                note_id TEXT NOT NULL,
+                note_path TEXT NOT NULL DEFAULT '',
+                chunk_index INTEGER NOT NULL DEFAULT 0,
+                text TEXT NOT NULL DEFAULT '',
+                vector BLOB NOT NULL,
+                chunk_offset INTEGER NOT NULL DEFAULT 0,
+                chunk_length INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (note_id, chunk_index)
+            );
+            CREATE INDEX IF NOT EXISTS idx_vector_chunks_note
+                ON vector_chunks(note_id);",
+        )?;
+        Ok(())
+    })
+}
+
+fn vector_to_blob(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+fn blob_to_vector(blob: &[u8]) -> Vec<f32> {
+    blob.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 
 pub fn search_similar_chunks(
-    vault_path: &Path,
     query_embedding: &[f32],
     top_k: usize,
 ) -> AppResult<Vec<SearchResult>> {
-    let index_path = index_file_path(vault_path);
+    let chunks: Vec<ChunkRecord> = db::with_conn(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT note_id, note_path, chunk_index, text, vector, chunk_offset, chunk_length
+             FROM vector_chunks",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ChunkRecord {
+                note_id: row.get(0)?,
+                note_path: row.get(1)?,
+                chunk_index: row.get::<_, i64>(2)? as u32,
+                text: row.get(3)?,
+                vector: blob_to_vector(&row.get::<_, Vec<u8>>(4)?),
+                chunk_offset: row.get::<_, i64>(5)? as u64,
+                chunk_length: row.get::<_, i64>(6)? as u64,
+            })
+        })?;
 
-    if !index_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let data = fs::read_to_string(&index_path)?;
-    let chunks: Vec<ChunkRecord> = serde_json::from_str(&data)?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    })?;
 
     let mut scored: Vec<(f64, &ChunkRecord)> = chunks
         .iter()
@@ -86,40 +111,45 @@ pub fn search_similar_chunks(
     Ok(results)
 }
 
-pub fn index_chunks(vault_path: &Path, new_chunks: &[ChunkRecord]) -> AppResult<()> {
-    let index_path = index_file_path(vault_path);
-
-    let mut existing: Vec<ChunkRecord> = if index_path.exists() {
-        let data = fs::read_to_string(&index_path)?;
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    existing.retain(|c| !new_chunks.iter().any(|nc| nc.note_id == c.note_id));
-
-    existing.extend(new_chunks.iter().cloned());
-
-    let json = serde_json::to_string(&existing)?;
-    fs::write(&index_path, json)?;
-
-    Ok(())
-}
-
-pub fn cleanup_note(vault_path: &Path, note_id: &str) -> AppResult<()> {
-    let index_path = index_file_path(vault_path);
-    if !index_path.exists() {
+pub fn index_chunks(new_chunks: &[ChunkRecord]) -> AppResult<()> {
+    if new_chunks.is_empty() {
         return Ok(());
     }
 
-    let data = fs::read_to_string(&index_path)?;
-    let mut chunks: Vec<ChunkRecord> = serde_json::from_str(&data).unwrap_or_default();
-    chunks.retain(|c| c.note_id != note_id);
+    db::with_conn(|conn| {
+        let mut delete_stmt = conn.prepare("DELETE FROM vector_chunks WHERE note_id = ?1")?;
+        for chunk in new_chunks {
+            delete_stmt.execute([&chunk.note_id])?;
+        }
+        drop(delete_stmt);
 
-    let json = serde_json::to_string(&chunks)?;
-    fs::write(&index_path, json)?;
+        let mut insert_stmt = conn.prepare(
+            "INSERT OR REPLACE INTO vector_chunks
+             (note_id, note_path, chunk_index, text, vector, chunk_offset, chunk_length)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?;
 
-    Ok(())
+        for chunk in new_chunks {
+            insert_stmt.execute(rusqlite::params![
+                chunk.note_id,
+                chunk.note_path,
+                chunk.chunk_index,
+                chunk.text,
+                vector_to_blob(&chunk.vector),
+                chunk.chunk_offset,
+                chunk.chunk_length,
+            ])?;
+        }
+
+        Ok(())
+    })
+}
+
+pub fn cleanup_note(note_id: &str) -> AppResult<()> {
+    db::with_conn(|conn| {
+        conn.execute("DELETE FROM vector_chunks WHERE note_id = ?1", [note_id])?;
+        Ok(())
+    })
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
@@ -134,25 +164,25 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     dot / (norm_a * norm_b)
 }
 
-struct AppConfig;
-
-impl AppConfig {
-    fn memoa_config_dir(vault_path: &Path) -> PathBuf {
-        vault_path.join(".memoa")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use crate::db;
     use tempfile::TempDir;
+
+    fn setup_test_db() -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        db::init(&db_path).unwrap();
+        ensure_table().unwrap();
+        tmp
+    }
 
     #[test]
     fn test_cosine_similarity_identical_vectors() {
         let v = vec![1.0, 2.0, 3.0];
         let score = cosine_similarity(&v, &v);
-        assert!((score - 1.0).abs() < 1e-6, "identical vectors should have similarity 1.0");
+        assert!((score - 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -160,7 +190,7 @@ mod tests {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![0.0, 1.0, 0.0];
         let score = cosine_similarity(&a, &b);
-        assert!((score - 0.0).abs() < 1e-6, "orthogonal vectors should have similarity 0.0");
+        assert!((score - 0.0).abs() < 1e-6);
     }
 
     #[test]
@@ -168,7 +198,7 @@ mod tests {
         let a = vec![1.0, 0.0];
         let b = vec![-1.0, 0.0];
         let score = cosine_similarity(&a, &b);
-        assert!((score - (-1.0)).abs() < 1e-6, "opposite vectors should have similarity -1.0");
+        assert!((score - (-1.0)).abs() < 1e-6);
     }
 
     #[test]
@@ -176,7 +206,7 @@ mod tests {
         let a = vec![0.0, 0.0];
         let b = vec![1.0, 2.0];
         let score = cosine_similarity(&a, &b);
-        assert_eq!(score, 0.0, "zero vector should give similarity 0.0");
+        assert_eq!(score, 0.0);
     }
 
     #[test]
@@ -186,21 +216,38 @@ mod tests {
     }
 
     #[test]
-    fn test_search_empty_index() {
-        let tmp = TempDir::new().unwrap();
-        let vault = tmp.path();
-        fs::create_dir_all(vault.join(".memoa")).unwrap();
+    fn test_vector_blob_roundtrip() {
+        let v = vec![1.0f32, -2.5, 0.0, 3.14];
+        let blob = vector_to_blob(&v);
+        let restored = blob_to_vector(&blob);
+        assert_eq!(v.len(), restored.len());
+        for (a, b) in v.iter().zip(restored.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
 
+    #[test]
+    fn test_vector_blob_empty() {
+        let v: Vec<f32> = vec![];
+        let blob = vector_to_blob(&v);
+        assert!(blob.is_empty());
+        let restored = blob_to_vector(&blob);
+        assert!(restored.is_empty());
+    }
+
+    #[test]
+    fn test_search_empty_index() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _tmp = setup_test_db();
         let query = vec![0.1, 0.2, 0.3];
-        let results = search_similar_chunks(vault, &query, 5).unwrap();
+        let results = search_similar_chunks(&query, 5).unwrap();
         assert!(results.is_empty());
     }
 
     #[test]
     fn test_index_and_search_chunks() {
-        let tmp = TempDir::new().unwrap();
-        let vault = tmp.path();
-        fs::create_dir_all(vault.join(".memoa")).unwrap();
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _tmp = setup_test_db();
 
         let chunks = vec![
             ChunkRecord {
@@ -232,22 +279,20 @@ mod tests {
             },
         ];
 
-        index_chunks(vault, &chunks).unwrap();
+        index_chunks(&chunks).unwrap();
 
         let query = vec![1.0, 0.1, 0.0];
-        let results = search_similar_chunks(vault, &query, 3).unwrap();
+        let results = search_similar_chunks(&query, 3).unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].note_id, "note1.md");
         assert_eq!(results[0].chunk_index, 0);
-        // The chunk most similar to query should be the first one
         assert!(results[0].score > results[1].score);
     }
 
     #[test]
     fn test_cleanup_note() {
-        let tmp = TempDir::new().unwrap();
-        let vault = tmp.path();
-        fs::create_dir_all(vault.join(".memoa")).unwrap();
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _tmp = setup_test_db();
 
         let chunks = vec![
             ChunkRecord {
@@ -270,20 +315,19 @@ mod tests {
             },
         ];
 
-        index_chunks(vault, &chunks).unwrap();
-        cleanup_note(vault, "remove.md").unwrap();
+        index_chunks(&chunks).unwrap();
+        cleanup_note("remove.md").unwrap();
 
         let query = vec![1.0, 1.0];
-        let results = search_similar_chunks(vault, &query, 10).unwrap();
+        let results = search_similar_chunks(&query, 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].note_id, "keep.md");
     }
 
     #[test]
     fn test_index_chunks_replaces_existing() {
-        let tmp = TempDir::new().unwrap();
-        let vault = tmp.path();
-        fs::create_dir_all(vault.join(".memoa")).unwrap();
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _tmp = setup_test_db();
 
         let old_chunks = vec![ChunkRecord {
             note_id: "note1.md".to_string(),
@@ -295,7 +339,7 @@ mod tests {
             chunk_length: 0,
         }];
 
-        index_chunks(vault, &old_chunks).unwrap();
+        index_chunks(&old_chunks).unwrap();
 
         let new_chunks = vec![ChunkRecord {
             note_id: "note1.md".to_string(),
@@ -307,11 +351,34 @@ mod tests {
             chunk_length: 0,
         }];
 
-        index_chunks(vault, &new_chunks).unwrap();
+        index_chunks(&new_chunks).unwrap();
 
         let query = vec![0.0, 1.0];
-        let results = search_similar_chunks(vault, &query, 5).unwrap();
+        let results = search_similar_chunks(&query, 5).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].text, "new content");
+    }
+
+    #[test]
+    fn test_large_vector() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _tmp = setup_test_db();
+
+        let large_vec: Vec<f32> = (0..1024).map(|i| (i as f32) * 0.001).collect();
+        let chunks = vec![ChunkRecord {
+            note_id: "big.md".to_string(),
+            note_path: "big.md".to_string(),
+            chunk_index: 0,
+            text: "large vector".to_string(),
+            vector: large_vec.clone(),
+            chunk_offset: 0,
+            chunk_length: 0,
+        }];
+
+        index_chunks(&chunks).unwrap();
+
+        let results = search_similar_chunks(&large_vec, 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!((results[0].score - 1.0).abs() < 1e-4);
     }
 }

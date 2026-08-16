@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTauriCommands } from "@/hooks/useTauriCommands";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useAppStore } from "@/stores/appStore";
+import { IconFolderOpen, IconRefresh } from "@/components/common/Icons";
 import { setVaultPath as persistVaultPath } from "@/services/storageService";
 import type { IndexStats } from "@/types";
 
@@ -68,7 +69,13 @@ export function DataSettings() {
       incrementGraphRefresh();
       incrementTagRefresh();
 
-      commands.reindexVault().then((reindexStats) => {
+      const embedConfig = {
+        provider: settings.embeddingConfig.provider,
+        modelId: settings.embeddingConfig.modelId,
+        apiUrl: settings.embeddingConfig.apiUrl,
+        apiKey: settings.embeddingConfig.apiKey,
+      };
+      commands.reindexVault(embedConfig).then((reindexStats) => {
         console.log("Vault switched, reindex done:", reindexStats);
         setIndexing(false);
         incrementGraphRefresh();
@@ -114,11 +121,11 @@ export function DataSettings() {
         )}
 
         <button
-          className="btn btn-primary text-xs px-4 py-2"
+          className="btn btn-ghost text-xs px-4 py-2"
           disabled={switching}
           onClick={handleSwitchVault}
         >
-          {switching ? "切换中..." : vaultPath ? "切换空间" : "选择文件夹"}
+          <IconFolderOpen size={12} /> {switching ? "切换中..." : vaultPath ? "切换空间" : "选择文件夹"}
         </button>
 
         {switchError && (
@@ -137,11 +144,11 @@ export function DataSettings() {
         </p>
 
         <button
-          className="btn btn-primary text-xs px-4 py-2"
+          className="btn btn-ghost text-xs px-4 py-2"
           disabled={indexing}
           onClick={handleReindex}
         >
-          {indexing ? "索引构建中..." : "重建索引"}
+          <IconRefresh size={12} /> {indexing ? "索引构建中..." : "重建索引"}
         </button>
 
         {error && (

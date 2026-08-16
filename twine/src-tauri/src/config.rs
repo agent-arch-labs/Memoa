@@ -23,6 +23,7 @@ pub struct AppConfig {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
     pub ollama_url: String,
+    pub redis_url: String,
 }
 
 impl AppConfig {
@@ -54,12 +55,16 @@ impl AppConfig {
         let ollama_url = std::env::var("OLLAMA_HOST")
             .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
 
+        let redis_url = std::env::var("MEMOA_REDIS_URL")
+            .unwrap_or_else(|_| "redis://:DVADMIN3@127.0.0.1:26379".to_string());
+
         Self {
             vault_path: Mutex::new(None),
             db_path,
             data_dir,
             config_dir,
             ollama_url,
+            redis_url,
         }
     }
 

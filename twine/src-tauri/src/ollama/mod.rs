@@ -2,14 +2,12 @@ use crate::error::{AppError, AppResult};
 
 pub struct OllamaClient {
     base_url: String,
-    client: reqwest::Client,
 }
 
 impl OllamaClient {
     pub fn new(base_url: &str) -> Self {
         Self {
             base_url: base_url.to_string(),
-            client: reqwest::Client::new(),
         }
     }
 
@@ -17,8 +15,7 @@ impl OllamaClient {
         let url = format!("{}/api/embeddings", self.base_url);
         let model = model.unwrap_or("nomic-embed-text");
 
-        let response = self
-            .client
+        let response = crate::http_client::get_client()
             .post(&url)
             .json(&serde_json::json!({
                 "model": model,
@@ -62,8 +59,7 @@ impl OllamaClient {
             "stream": false,
         });
 
-        let response = self
-            .client
+        let response = crate::http_client::get_client()
             .post(&url)
             .json(&request)
             .send()
@@ -90,7 +86,7 @@ impl OllamaClient {
     pub async fn health_check(&self) -> AppResult<bool> {
         let url = format!("{}/api/tags", self.base_url);
 
-        let response = self.client.get(&url).send().await;
+        let response = crate::http_client::get_client().get(&url).send().await;
 
         match response {
             Ok(resp) => Ok(resp.status().is_success()),

@@ -24,8 +24,8 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['"Inter"', "system-ui", "sans-serif"],
-        mono: ['"JetBrains Mono"', "Menlo", "monospace"],
+        sans: ['"Inter"', '"PingFang SC"', '"Microsoft YaHei"', '"Noto Sans SC"', "system-ui", "sans-serif"],
+        mono: ['"JetBrains Mono"', '"Sarasa Mono SC"', '"Fira Code"', "Menlo", "Consolas", "monospace"],
       },
       fontSize: {
         "editor-h1": ["2rem", { lineHeight: "2.5rem", fontWeight: "700" }],

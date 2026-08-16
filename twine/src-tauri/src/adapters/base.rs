@@ -1,6 +1,7 @@
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -77,11 +78,12 @@ impl ModelAdapter {
         messages: Vec<Message>,
         config: &ModelConfig,
         tx: mpsc::UnboundedSender<StreamChunk>,
+        token: CancellationToken,
     ) -> AppResult<()> {
         match self {
-            ModelAdapter::Ollama(a) => a.chat_stream(messages, config, tx).await,
-            ModelAdapter::OpenAiCompatible(a) => a.chat_stream(messages, config, tx).await,
-            ModelAdapter::Zhipu(a) => a.chat_stream(messages, config, tx).await,
+            ModelAdapter::Ollama(a) => a.chat_stream(messages, config, tx, token).await,
+            ModelAdapter::OpenAiCompatible(a) => a.chat_stream(messages, config, tx, token).await,
+            ModelAdapter::Zhipu(a) => a.chat_stream(messages, config, tx, token).await,
         }
     }
 

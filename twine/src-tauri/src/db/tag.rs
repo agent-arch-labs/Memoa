@@ -40,6 +40,10 @@ pub fn cleanup_orphans() -> AppResult<()> {
             )",
             [],
         )?;
+        conn.execute(
+            "DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM note_tags)",
+            [],
+        )?;
         Ok(())
     })
 }

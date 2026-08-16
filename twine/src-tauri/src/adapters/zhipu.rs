@@ -1,6 +1,7 @@
 use crate::adapters::base::{ChatResult, Message, StreamChunk, UsageInfo, ModelConfig};
 use crate::error::{AppError, AppResult};
 use futures_util::stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 pub struct ZhipuAdapter;
 
@@ -12,7 +13,7 @@ impl ZhipuAdapter {
             format!("{}/chat/completions", config.api_url.trim_end_matches('/'))
         };
 
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", config.api_key))
@@ -64,7 +65,7 @@ impl ZhipuAdapter {
             format!("{}/embeddings", config.api_url.trim_end_matches('/'))
         };
 
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
         let response = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", config.api_key))
@@ -96,7 +97,7 @@ impl ZhipuAdapter {
 
     pub async fn health_check(&self, config: &ModelConfig) -> AppResult<bool> {
         let url = config.api_url.trim_end_matches('/').to_string();
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
         let request = client
             .get(&url)
             .header("Authorization", format!("Bearer {}", config.api_key));
@@ -112,6 +113,7 @@ impl ZhipuAdapter {
         messages: Vec<Message>,
         config: &ModelConfig,
         tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>,
+        token: CancellationToken,
     ) -> AppResult<()> {
         let url = if config.api_url.contains("/chat/completions") {
             config.api_url.clone()
@@ -119,8 +121,8 @@ impl ZhipuAdapter {
             format!("{}/chat/completions", config.api_url.trim_end_matches('/'))
         };
 
-        let client = reqwest::Client::new();
-        let response = client
+        let client = crate::http_client::get_client();
+        let response = match client
             .post(&url)
             .header("Authorization", format!("Bearer {}", config.api_key))
             .json(&serde_json::json!({
@@ -134,7 +136,16 @@ impl ZhipuAdapter {
             }))
             .send()
             .await
-            .map_err(|e| AppError::Other(format!("智谱 API 连接失败: {}", e)))?;
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                let _ = tx.send(StreamChunk {
+                    content: format!("智谱 API 连接失败: {}", e),
+                    done: true,
+                });
+                return Ok(());
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -147,6 +158,10 @@ impl ZhipuAdapter {
         let mut buffer = String::new();
 
         while let Some(chunk) = stream.next().await {
+            if token.is_cancelled() {
+                let _ = tx.send(StreamChunk { content: String::new(), done: true });
+                break;
+            }
             let chunk = match chunk {
                 Ok(c) => c,
                 Err(_) => break,

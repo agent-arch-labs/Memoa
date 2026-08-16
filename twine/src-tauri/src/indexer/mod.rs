@@ -247,7 +247,7 @@ async fn index_note_embeddings(
     adapter: &ModelAdapter,
     config: &ModelConfig,
 ) -> AppResult<()> {
-    let _ = embedding::cleanup_note(vault_path, note_id);
+    let _ = embedding::cleanup_note(note_id);
 
     let chunks = crate::chunker::chunk_text(content);
 
@@ -275,7 +275,7 @@ async fn index_note_embeddings(
     }
 
     if !chunk_records.is_empty() {
-        embedding::index_chunks(vault_path, &chunk_records)?;
+        embedding::index_chunks(&chunk_records)?;
     }
 
     Ok(())

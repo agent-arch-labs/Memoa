@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useAppStore, MIN_FONT_SIZE, MAX_FONT_SIZE } from "@/stores/appStore";
 import { t } from "@/i18n/locale";
 import { SelectDropdown } from "./SelectDropdown";
+import { IconMoon, IconSun } from "@/components/common/Icons";
 
 export function AppearanceSettings() {
   const isDark = useAppStore((s) => s.isDark);
@@ -31,7 +32,7 @@ export function AppearanceSettings() {
             }`}
             onClick={() => { if (!isDark) toggleTheme(); }}
           >
-            🌙 {t("appearance.theme.dark")}
+            <IconMoon size={12} /> {t("appearance.theme.dark")}
           </button>
           <button
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
@@ -41,7 +42,7 @@ export function AppearanceSettings() {
             }`}
             onClick={() => { if (isDark) toggleTheme(); }}
           >
-            ☀️ {t("appearance.theme.light")}
+            <IconSun size={12} /> {t("appearance.theme.light")}
           </button>
         </div>
       </section>

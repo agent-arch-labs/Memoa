@@ -3,10 +3,16 @@ import { useAppStore } from "@/stores/appStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useClickOutside } from "@/hooks/useClickOutside";
 import { useSearchExtensions } from "@/hooks/useSearchExtensions";
+import { IconFile, IconFolder, IconClose } from "@/components/common/Icons";
 import { FilePickerPopover } from "./FilePickerPopover";
 import type { AnswerMode, DataSource, ContextTarget } from "@/types";
 
-const ANSWER_MODE_ICONS: Record<AnswerMode, string> = { rag: "🔍", agent: "🧠", deepresearch: "🔬", agent_rag: "⚡" };
+const ANSWER_MODE_ICONS: Record<AnswerMode, React.ReactNode> = {
+  rag: <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3"><circle cx="6.5" cy="6.5" r="4.5" /><line x1="10" y1="10" x2="14" y2="14" /></svg>,
+  agent: <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a4 4 0 014 4v1h1a2 2 0 012 2v5a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h1V5a4 4 0 014-4zm0 1.5A2.5 2.5 0 005.5 5v1h5V5A2.5 2.5 0 008 2.5z" /></svg>,
+  deepresearch: <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3"><path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.9 2.9l1.4 1.4M11.7 11.7l1.4 1.4M2.9 13.1l1.4-1.4M11.7 4.3l1.4-1.4" /><circle cx="8" cy="8" r="3" /></svg>,
+  agent_rag: <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M9 1l1 2 2 .5-1.5 1.5.3 2L9 6.3 7.2 7l.3-2L6 3.5 8 3l1-2zM4 8v6h8V8H4zm1 1h6v4H5V9z" /></svg>,
+};
 const ANSWER_MODE_LABELS: Record<AnswerMode, string> = { rag: "RAG", agent: "Agent", deepresearch: "DeepResearch", agent_rag: "Agent RAG" };
 const ANSWER_MODE_DESCS: Record<AnswerMode, string> = {
   rag: "检索增强生成",
@@ -25,6 +31,7 @@ interface ChatInputAreaProps {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
+  onCancel?: () => void;
   loading: boolean;
   answerMode: AnswerMode;
   dataSource: DataSource;
@@ -41,6 +48,7 @@ export function ChatInputArea({
   value,
   onChange,
   onSend,
+  onCancel,
   loading,
   answerMode,
   dataSource,
@@ -89,6 +97,7 @@ export function ChatInputArea({
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (loading) return;
@@ -112,13 +121,18 @@ export function ChatInputArea({
                   ? `【${contextTarget.label}】`
                   : contextTarget.type === "file"
                   ? `【${contextTarget.label}】`
+                  : contextTarget.type === "stock"
+                  ? `【${contextTarget.label}】`
                   : "";
 
                 if (dataSource === "knowledge") {
                   return scope ? `向知识库 ${scope} 提问...` : "向知识库提问...";
                 }
                 if (dataSource === "online") {
-                  return scope ? `联网 RAG 向 ${scope} 提问...` : "联网 RAG 提问...";
+                  if (contextTarget.type === "stock") {
+                    return `联网搜索 ${scope} 最新资讯，AI 分析...`;
+                  }
+                  return scope ? `联网检索 ${scope} 相关信息...` : "联网检索提问...";
                 }
                 return scope ? `向本地文件 ${scope} 提问...` : "向本地文件提问...";
               })()
@@ -176,8 +190,10 @@ export function ChatInputArea({
                 >
                   <span className="text-xs">{getDataSourceIcon(dataSource)}</span>
                   <span className="text-[10px]">
-                    {getDataSourceLabel(dataSource)}
-                    {contextTarget.type !== "all" && ` · ${contextTarget.label}`}
+                    {contextTarget.type === "stock" && dataSource === "online"
+                      ? "联网分析"
+                      : getDataSourceLabel(dataSource)}
+                    {contextTarget.type !== "all" && contextTarget.type !== "stock" && ` · ${contextTarget.label}`}
                   </span>
                   <svg
                     className={`w-2.5 h-2.5 shrink-0 transition-transform duration-200 ${showDataSourceDropdown ? "rotate-180" : ""}`}
@@ -232,13 +248,13 @@ export function ChatInputArea({
                   }`}
                   title={ref.path}
                 >
-                  {ref.type === "file" ? "📄" : "📁"}
+                  {ref.type === "file" ? <IconFile size={10} /> : <IconFolder size={10} />}
                   <span className="max-w-[120px] truncate">{ref.name}</span>
                   <button
-                    className="ml-0.5 hover:opacity-70 transition-opacity"
+                    className="ml-0.5 hover:opacity-70 transition-opacity flex items-center rounded-sm hover:bg-black/10 dark:hover:bg-white/10 p-0.5"
                     onClick={() => removeRef(ref.path)}
                   >
-                    ×
+                    <IconClose size={8} />
                   </button>
                 </span>
               ))}
@@ -347,16 +363,20 @@ export function ChatInputArea({
 
               <button
                 className={`flex items-center justify-center w-8 h-8 rounded-xl text-sm font-bold transition-all duration-200 ${
-                  value.trim() && !loading
-                    ? "bg-[var(--color-accent)] text-white shadow-sm shadow-[var(--color-accent)]/30 hover:shadow-md hover:shadow-[var(--color-accent)]/40 hover:scale-105 active:scale-95"
-                    : "bg-[var(--color-surface-hover)] text-[var(--color-text-muted)] cursor-not-allowed"
+                  loading
+                    ? "bg-red-500 text-white shadow-sm shadow-red-500/30 hover:shadow-md hover:shadow-red-500/40 hover:scale-105 active:scale-95"
+                    : value.trim()
+                      ? "bg-[var(--color-accent)] text-white shadow-sm shadow-[var(--color-accent)]/30 hover:shadow-md hover:shadow-[var(--color-accent)]/40 hover:scale-105 active:scale-95"
+                      : "bg-[var(--color-surface-hover)] text-[var(--color-text-muted)] cursor-not-allowed"
                 }`}
-                onClick={onSend}
-                disabled={loading || !value.trim()}
-                title="发送"
+                onClick={loading && onCancel ? onCancel : onSend}
+                disabled={!loading && !value.trim()}
+                title={loading ? "取消" : "发送"}
               >
                 {loading ? (
-                  <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
                 ) : (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <line x1="12" y1="19" x2="12" y2="5" />

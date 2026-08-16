@@ -8,6 +8,7 @@ export function SearchPanel() {
   const commands = useTauriCommands();
   const setCurrentNote = useAppStore((s) => s.setCurrentNote);
   const setContextTarget = useAppStore((s) => s.setContextTarget);
+  const saveCurrentNote = useAppStore((s) => s.saveCurrentNote);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -64,6 +65,7 @@ export function SearchPanel() {
       }
       const fullPath = `${vaultPath}/${result.path.replace(/^\//, "")}`;
       const content = await commands.readFile(fullPath);
+      await saveCurrentNote();
       setCurrentNote(fullPath, content);
       setContextTarget({
         type: "file",

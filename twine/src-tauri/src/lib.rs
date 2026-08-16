@@ -27,6 +27,7 @@ mod adapters;
 pub mod agent_rag;
 mod ai_runtime;
 mod bm25;
+mod cancellation;
 mod chunker;
 mod commands;
 mod config;
@@ -34,8 +35,10 @@ mod db;
 mod embedding;
 mod error;
 mod fusion;
+mod http_client;
 mod indexer;
 mod ollama;
+mod secrets;
 
 pub use config::AppConfig;
 pub use error::{AppError, AppResult};
@@ -85,6 +88,7 @@ pub fn run() {
             commands::search::get_local_graph,
             commands::ai::model_chat,
             commands::ai::model_chat_stream,
+            commands::ai::cancel_chat_stream,
             commands::ai::model_embed,
             commands::ai::model_health_check,
             commands::ai::model_chat_check,
@@ -111,8 +115,41 @@ pub fn run() {
             commands::agent_rag::agent_rag_memory_load,
             commands::agent_rag::agent_rag_memory_update_profile,
             commands::agent_rag::agent_rag_memory_clear,
+            secrets::secret_encrypt_api_key,
+            secrets::secret_decrypt_api_key,
+            commands::astock::stock_suggest,
+            commands::astock::stock_quote,
+            commands::astock::kline_image_url,
+            commands::astock::index_kline_image_url,
+            commands::astock::baostock_query_kline,
+            commands::astock::baostock_query_financial,
+            commands::astock::baostock_stock_list,
+            commands::astock::baostock_financial_report,
+            commands::astock::east_stock_info,
+            commands::astock::east_market_indices,
+            commands::astock::write_stock_file,
+            commands::astock::baostock_screener,
+            commands::astock::redis_health_check,
+            commands::astock::baostock_sync_data,
+            commands::astock::baostock_sync_status,
+            commands::astock::sync_daily_kline,
+            commands::astock::daily_sync_status,
+            commands::astock::concept_timeline_refresh,
+            commands::astock::concept_timeline_sync,
+            commands::astock::concept_timeline_query,
+            commands::astock::sync_local_data,
+            commands::astock::industry_timeline_refresh,
+            commands::astock::industry_timeline_sync,
+            commands::astock::industry_timeline_query,
+            commands::astock::timeline_reset,
         ])
         .manage(AppConfig::new())
+        .setup(|app| {
+            // 启动每日K线定时同步调度器
+            let handle = app.handle().clone();
+            commands::astock::start_daily_sync_scheduler(handle);
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running Memoa");
 }

@@ -181,35 +181,64 @@ fn get_note_tags(note_id: &str, conn: &rusqlite::Connection) -> Vec<String> {
     }
 }
 
-fn get_note_aliases(note_id: &str, conn: &rusqlite::Connection) -> Vec<String> {
-    let frontmatter_json: Option<String> = conn
-        .query_row(
-            "SELECT frontmatter_json FROM notes WHERE id = ?1",
-            [note_id],
-            |row| row.get(0),
-        )
-        .ok()
-        .flatten();
+fn get_all_note_tags_batch(conn: &rusqlite::Connection) -> std::collections::HashMap<String, Vec<String>> {
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut stmt = match conn.prepare(
+        "SELECT nt.note_id, t.name FROM note_tags nt
+         INNER JOIN tags t ON nt.tag_id = t.id
+         ORDER BY t.name",
+    ) {
+        Ok(s) => s,
+        Err(_) => return map,
+    };
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    });
+    if let Ok(iter) = rows {
+        for row in iter.flatten() {
+            map.entry(row.0).or_default().push(row.1);
+        }
+    }
+    map
+}
 
-    match frontmatter_json {
-        Some(json_str) => {
-            let value: serde_json::Value =
-                serde_yaml::from_str(&json_str).ok().unwrap_or(serde_json::Value::Null);
-            let mut aliases = Vec::new();
-            if let Some(arr) = value.get("aliases").and_then(|v| v.as_array()) {
-                for item in arr {
-                    if let Some(s) = item.as_str() {
-                        let trimmed = s.trim().to_string();
-                        if !trimmed.is_empty() {
-                            aliases.push(trimmed);
-                        }
-                    }
+fn extract_aliases_from_frontmatter(frontmatter_json: &str) -> Vec<String> {
+    let value: serde_json::Value =
+        serde_yaml::from_str(frontmatter_json).ok().unwrap_or(serde_json::Value::Null);
+    let mut aliases = Vec::new();
+    if let Some(arr) = value.get("aliases").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                let trimmed = s.trim().to_string();
+                if !trimmed.is_empty() {
+                    aliases.push(trimmed);
                 }
             }
-            aliases
         }
-        None => Vec::new(),
     }
+    aliases
+}
+
+fn get_all_note_aliases_batch(conn: &rusqlite::Connection) -> std::collections::HashMap<String, Vec<String>> {
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut stmt = match conn.prepare(
+        "SELECT id, frontmatter_json FROM notes WHERE frontmatter_json IS NOT NULL",
+    ) {
+        Ok(s) => s,
+        Err(_) => return map,
+    };
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    });
+    if let Ok(iter) = rows {
+        for row in iter.flatten() {
+            let aliases = extract_aliases_from_frontmatter(&row.1);
+            if !aliases.is_empty() {
+                map.insert(row.0, aliases);
+            }
+        }
+    }
+    map
 }
 
 pub fn get_graph_data() -> AppResult<GraphData> {
@@ -234,10 +263,11 @@ pub fn get_graph_data() -> AppResult<GraphData> {
     let mut edge_set: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     let mut alias_to_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
-    super::with_conn(|conn| {
-        for (id, _, _) in &all_notes {
-            for alias in get_note_aliases(id, conn) {
-                alias_to_id.entry(alias).or_insert_with(|| id.clone());
+    let (tag_map, _alias_map) = super::with_conn(|conn| {
+        let aliases = get_all_note_aliases_batch(conn);
+        for (note_id, note_aliases) in &aliases {
+            for alias in note_aliases {
+                alias_to_id.entry(alias.clone()).or_insert_with(|| note_id.clone());
             }
         }
 
@@ -276,27 +306,25 @@ pub fn get_graph_data() -> AppResult<GraphData> {
             }
         }
 
-        Ok::<_, crate::error::AppError>(())
+        let tags = get_all_note_tags_batch(conn);
+        Ok::<_, crate::error::AppError>((tags, aliases))
     })?;
 
-    let mut nodes: Vec<GraphNode> = super::with_conn(|conn| {
-        let mut result = Vec::new();
-        for (id, title, path) in &all_notes {
-            if !node_id_set.insert(id.clone()) {
-                continue;
-            }
-            let tags = get_note_tags(id, conn);
-            result.push(GraphNode {
-                id: id.clone(),
-                title: title.clone(),
-                path: path.clone(),
-                link_count: *total_counts.get(id).unwrap_or(&0),
-                incoming_count: *incoming_counts.get(id).unwrap_or(&0),
-                tags,
-            });
+    let mut nodes: Vec<GraphNode> = Vec::new();
+    for (id, title, path) in &all_notes {
+        if !node_id_set.insert(id.clone()) {
+            continue;
         }
-        Ok(result)
-    })?;
+        let tags = tag_map.get(id).cloned().unwrap_or_default();
+        nodes.push(GraphNode {
+            id: id.clone(),
+            title: title.clone(),
+            path: path.clone(),
+            link_count: *total_counts.get(id).unwrap_or(&0),
+            incoming_count: *incoming_counts.get(id).unwrap_or(&0),
+            tags,
+        });
+    }
 
     edges.retain(|e| {
         node_id_set.contains(&e.source) && node_id_set.contains(&e.target)
@@ -398,6 +426,7 @@ mod tests {
 
     #[test]
     fn test_link_add_and_remove_sync_to_graph_data() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_a_id = register_note(
@@ -464,6 +493,7 @@ mod tests {
 
     #[test]
     fn test_link_change_updates_graph_correctly() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_a_id = register_note("/vault/A.md", "", "# A");
@@ -526,6 +556,7 @@ mod tests {
 
     #[test]
     fn test_multiple_links_add_and_remove() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_a_id = register_note("/vault/A.md", "", "# A");
@@ -602,6 +633,7 @@ mod tests {
 
     #[test]
     fn test_no_duplicate_edges_in_graph_data() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_a_id = register_note("/vault/A.md", "", "# A");
@@ -633,6 +665,7 @@ mod tests {
 
     #[test]
     fn test_cleanup_orphan_links() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_a_id = register_note("/vault/A.md", "", "# A\n[[B]]");
@@ -669,6 +702,7 @@ mod tests {
 
     #[test]
     fn test_empty_links_after_delete_all_references() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_a_id = register_note("/vault/A.md", "", "# A");
@@ -710,6 +744,7 @@ mod tests {
 
     #[test]
     fn test_full_write_file_flow_add_then_remove_link() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_a_path = "/vault/A.md";
@@ -805,6 +840,7 @@ mod tests {
 
     #[test]
     fn test_path_based_wiki_link_resolution() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let _subdir_a = register_note("subdir/A.md", "", "# A\nSubdir note.");
@@ -834,6 +870,7 @@ mod tests {
 
     #[test]
     fn test_path_based_link_with_md_extension() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let _subdir_a = register_note("subdir/A.md", "", "# A");
@@ -862,6 +899,7 @@ mod tests {
 
     #[test]
     fn test_same_title_different_folders_path_resolution() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_a = register_note("folder1/Note.md", "Note", "# Note in folder1.");
@@ -900,6 +938,7 @@ mod tests {
 
     #[test]
     fn test_node_add_and_remove_sync_to_graph() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let graph0 = get_graph_data().unwrap();
@@ -922,6 +961,7 @@ mod tests {
 
     #[test]
     fn test_node_title_update_sync_to_graph() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         register_note("X.md", "Old Title", "# Old Title\nContent.");
@@ -940,6 +980,7 @@ mod tests {
 
     #[test]
     fn test_node_path_update_sync_to_graph() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_guard, _db_path) = setup_test_db();
 
         let note_id = register_note("old-path.md", "Old", "# Old\nContent.");

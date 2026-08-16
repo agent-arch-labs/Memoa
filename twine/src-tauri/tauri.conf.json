@@ -28,7 +28,7 @@
       "tooltip": "Memoa"
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https://*; img-src 'self' data: https: asset: tauri:; font-src 'self' data:; media-src 'self' data:"
     },
     "withGlobalTauri": true
   },
@@ -41,6 +41,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "scripts/*": "scripts/",
+      "../data/*": "data/"
+    },
     "targets": ["deb", "rpm", "msi", "nsis"],
     "linux": {
       "deb": {

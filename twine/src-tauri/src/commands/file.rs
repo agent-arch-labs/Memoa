@@ -60,8 +60,8 @@ fn remove_bm25_for_file(vault_path: &std::path::Path, file_path: &std::path::Pat
     let _ = Bm25Index::remove_note(vault_path, &note_path);
 }
 
-fn remove_vectors_for_note(vault_path: &std::path::Path, file_path: &std::path::Path) {
-    let _ = crate::embedding::cleanup_note(vault_path, file_path.to_string_lossy().as_ref());
+fn remove_vectors_for_note(_vault_path: &std::path::Path, file_path: &std::path::Path) {
+    let _ = crate::embedding::cleanup_note(file_path.to_string_lossy().as_ref());
 }
 
 #[tauri::command]

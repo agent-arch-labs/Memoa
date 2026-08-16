@@ -1,5 +1,8 @@
 import { create } from "zustand";
 import { getJson, setJson } from "@/services/storageService";
+import { invoke } from "@tauri-apps/api/core";
+
+const ENC_PREFIX = "enc:";
 
 export type ModelProvider = "ollama" | "openai_compatible" | "zhipu";
 
@@ -77,8 +80,43 @@ function loadSettings(): AppSettings {
   };
 }
 
-function saveSettings(settings: AppSettings) {
-  setJson("settings", settings);
+async function encryptForStorage(settings: AppSettings): Promise<AppSettings> {
+  const llmModels = await Promise.all(
+    settings.llmModels.map(async (m) => ({
+      ...m,
+      apiKey: m.apiKey && !m.apiKey.startsWith(ENC_PREFIX)
+        ? `${ENC_PREFIX}${await invoke<string>("secret_encrypt_api_key", { value: m.apiKey })}`
+        : m.apiKey,
+    }))
+  );
+  const embConfig = settings.embeddingConfig.apiKey && !settings.embeddingConfig.apiKey.startsWith(ENC_PREFIX)
+    ? { ...settings.embeddingConfig, apiKey: `${ENC_PREFIX}${await invoke<string>("secret_encrypt_api_key", { value: settings.embeddingConfig.apiKey })}` }
+    : settings.embeddingConfig;
+  return { ...settings, llmModels, embeddingConfig: embConfig };
+}
+
+async function saveSettings(settings: AppSettings) {
+  try {
+    const encrypted = await encryptForStorage(settings);
+    setJson("settings", encrypted);
+  } catch {
+    setJson("settings", settings);
+  }
+}
+
+async function decryptFromStorage(settings: AppSettings): Promise<AppSettings> {
+  const llmModels = await Promise.all(
+    settings.llmModels.map(async (m) => ({
+      ...m,
+      apiKey: m.apiKey && m.apiKey.startsWith(ENC_PREFIX)
+        ? await invoke<string>("secret_decrypt_api_key", { encrypted: m.apiKey.slice(ENC_PREFIX.length) })
+        : m.apiKey,
+    }))
+  );
+  const embConfig = settings.embeddingConfig.apiKey && settings.embeddingConfig.apiKey.startsWith(ENC_PREFIX)
+    ? { ...settings.embeddingConfig, apiKey: await invoke<string>("secret_decrypt_api_key", { encrypted: settings.embeddingConfig.apiKey.slice(ENC_PREFIX.length) }) }
+    : settings.embeddingConfig;
+  return { ...settings, llmModels, embeddingConfig: embConfig };
 }
 
 export function getActiveLlmConfig(settings: AppSettings): ModelConfig | null {
@@ -94,15 +132,17 @@ export function getActiveLlmConfig(settings: AppSettings): ModelConfig | null {
 }
 
 interface SettingsStore extends AppSettings {
-  addLlmModel: (model: Omit<LlmModelConfig, "id">) => string;
-  updateLlmModel: (id: string, partial: Partial<LlmModelConfig>) => void;
-  deleteLlmModel: (id: string) => void;
-  setActiveLlmModel: (id: string | null) => void;
-  setEmbeddingConfig: (config: Partial<ModelConfig>) => void;
-  importLlmModels: (models: Omit<LlmModelConfig, "id">[]) => string[];
-  setOllamaUrl: (url: string) => void;
-  setLlmModel: (model: string) => void;
-  setEmbeddingModel: (model: string) => void;
+  addLlmModel: (model: Omit<LlmModelConfig, "id">) => Promise<string>;
+  updateLlmModel: (id: string, partial: Partial<LlmModelConfig>) => Promise<void>;
+  deleteLlmModel: (id: string) => Promise<void>;
+  reorderLlmModel: (fromIndex: number, toIndex: number) => Promise<void>;
+  setActiveLlmModel: (id: string | null) => Promise<void>;
+  setEmbeddingConfig: (config: Partial<ModelConfig>) => Promise<void>;
+  importLlmModels: (models: Omit<LlmModelConfig, "id">[]) => Promise<string[]>;
+  setOllamaUrl: (url: string) => Promise<void>;
+  setLlmModel: (model: string) => Promise<void>;
+  setEmbeddingModel: (model: string) => Promise<void>;
+  initSecrets: () => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => {
@@ -123,7 +163,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
   return {
     ...initial,
 
-    addLlmModel: (model: Omit<LlmModelConfig, "id">) => {
+    addLlmModel: async (model: Omit<LlmModelConfig, "id">) => {
       const id = generateId();
       const newModel: LlmModelConfig = { id, ...model };
       const current = get();
@@ -135,11 +175,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
       };
       syncLegacy(updated);
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
       return id;
     },
 
-    updateLlmModel: (id: string, partial: Partial<LlmModelConfig>) => {
+    updateLlmModel: async (id: string, partial: Partial<LlmModelConfig>) => {
       const current = get();
       const llmModels = current.llmModels.map((m) =>
         m.id === id ? { ...m, ...partial } : m,
@@ -147,10 +187,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
       const updated = { ...current, llmModels };
       syncLegacy(updated);
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
     },
 
-    deleteLlmModel: (id: string) => {
+    deleteLlmModel: async (id: string) => {
       const current = get();
       const llmModels = current.llmModels.filter((m) => m.id !== id);
       const activeLlmModelId =
@@ -160,27 +200,38 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
       const updated = { ...current, llmModels, activeLlmModelId };
       syncLegacy(updated);
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
     },
 
-    setActiveLlmModel: (id: string | null) => {
+    reorderLlmModel: async (fromIndex: number, toIndex: number) => {
+      const current = get();
+      const models = [...current.llmModels];
+      if (fromIndex < 0 || fromIndex >= models.length || toIndex < 0 || toIndex >= models.length) return;
+      const [moved] = models.splice(fromIndex, 1);
+      models.splice(toIndex, 0, moved);
+      const updated = { ...current, llmModels: models };
+      set(updated);
+      await saveSettings(updated);
+    },
+
+    setActiveLlmModel: async (id: string | null) => {
       const current = get();
       const updated = { ...current, activeLlmModelId: id };
       syncLegacy(updated);
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
     },
 
-    setEmbeddingConfig: (partial: Partial<ModelConfig>) => {
+    setEmbeddingConfig: async (partial: Partial<ModelConfig>) => {
       const current = get();
       const embeddingConfig = { ...current.embeddingConfig, ...partial };
       const updated = { ...current, embeddingConfig };
       syncLegacy(updated);
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
     },
 
-    importLlmModels: (models: Omit<LlmModelConfig, "id">[]) => {
+    importLlmModels: async (models: Omit<LlmModelConfig, "id">[]) => {
       const current = get();
       const newModels = models.map((m) => ({ ...m, id: generateId() }));
       const existingUrls = new Set(current.llmModels.map((m) => m.modelId + m.apiUrl));
@@ -195,29 +246,37 @@ export const useSettingsStore = create<SettingsStore>((set, get) => {
       };
       syncLegacy(updated);
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
       return uniqueModels.map((m) => m.id);
     },
 
-    setOllamaUrl: (url: string) => {
+    setOllamaUrl: async (url: string) => {
       const current = get();
       const updated = { ...current, ollamaUrl: url };
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
     },
 
-    setLlmModel: (model: string) => {
+    setLlmModel: async (model: string) => {
       const current = get();
       const updated = { ...current, llmModel: model };
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
     },
 
-    setEmbeddingModel: (model: string) => {
+    setEmbeddingModel: async (model: string) => {
       const current = get();
       const updated = { ...current, embeddingModel: model };
       set(updated);
-      saveSettings(updated);
+      await saveSettings(updated);
+    },
+
+    initSecrets: async () => {
+      const current = get();
+      try {
+        const decrypted = await decryptFromStorage(current);
+        set(decrypted);
+      } catch {}
     },
   };
 });

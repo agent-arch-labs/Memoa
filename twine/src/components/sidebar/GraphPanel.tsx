@@ -477,7 +477,9 @@ export function GraphPanel() {
             : `${vp}/${node.path}`;
           readFile(fullPath)
             .then((content) => {
-              setCurrentNote(fullPath, content);
+              useAppStore.getState().saveCurrentNote().then(() => {
+                setCurrentNote(fullPath, content);
+              });
               setDataSource("local");
               setContextTarget({
                 type: "file",

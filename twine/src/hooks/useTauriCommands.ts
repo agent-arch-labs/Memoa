@@ -18,6 +18,16 @@ import type {
   AgentToolInfo,
   AgentWorkflowResult,
   AgentRagStrategy,
+  StockSuggestItem,
+  SinaQuoteField,
+  BaoStockKLine,
+  BaoStockFinancial,
+  BaoStockFinancialResult,
+  ScreenerResult,
+  SyncStatus,
+  DailySyncStatus,
+  EastStockInfo,
+  MarketIndex,
 } from "@/types";
 import type { ModelConfig } from "@/stores/settingsStore";
 import { modelConfigToTauriArgs } from "@/stores/settingsStore";
@@ -41,6 +51,7 @@ type TauriCommands = {
   getLocalGraph: (noteId: string, depth: number) => Promise<GraphData>;
   modelChat: (prompt: string, context: string[], modelConfig: ModelConfig) => Promise<string>;
   modelChatStream: (prompt: string, context: string[], modelConfig: ModelConfig, requestId: string) => Promise<void>;
+  cancelChatStream: (requestId: string) => Promise<boolean>;
   modelEmbed: (text: string, modelConfig: ModelConfig) => Promise<EmbeddingResult>;
   modelHealthCheck: (modelConfig: ModelConfig) => Promise<boolean>;
   modelChatCheck: (modelConfig: ModelConfig) => Promise<boolean>;
@@ -76,6 +87,25 @@ type TauriCommands = {
   agentRagMemoryLoad: () => Promise<unknown>;
   agentRagMemoryUpdateProfile: (text: string) => Promise<void>;
   agentRagMemoryClear: () => Promise<void>;
+  secretEncryptApiKey: (value: string) => Promise<string>;
+  secretDecryptApiKey: (encrypted: string) => Promise<string>;
+  stockSuggest: (keyword: string) => Promise<StockSuggestItem[]>;
+  stockQuote: (codes: string[]) => Promise<SinaQuoteField[]>;
+  klineImageUrl: (code: string, period: string) => Promise<string>;
+  indexKlineImageUrl: (indexCode: string, period: string) => Promise<string>;
+  baostockQueryKline: (code: string, startDate: string, endDate: string, frequency: string, adjustflag?: string) => Promise<BaoStockKLine[]>;
+  baostockQueryFinancial: (code: string, year: number, quarter: number) => Promise<BaoStockFinancial[]>;
+  baostockFinancialReport: (code: string) => Promise<BaoStockFinancialResult>;
+  baostockStockList: () => Promise<StockSuggestItem[]>;
+  eastStockInfo: (code: string, market: string) => Promise<EastStockInfo>;
+  eastMarketIndices: () => Promise<MarketIndex[]>;
+  writeStockFile: (path: string, content: string, append?: boolean) => Promise<string>;
+  baostockScreener: (action: string, days?: number, limit?: number) => Promise<ScreenerResult>;
+  redisHealthCheck: () => Promise<boolean>;
+  baostockSyncData: () => Promise<string>;
+  baostockSyncStatus: () => Promise<SyncStatus>;
+  syncDailyKline: () => Promise<string>;
+  dailySyncStatus: () => Promise<DailySyncStatus>;
 };
 
 export function useTauriCommands(): TauriCommands {
@@ -127,6 +157,8 @@ export function useTauriCommands(): TauriCommands {
           modelConfig: modelConfigToTauriArgs(modelConfig),
           requestId,
         }),
+      cancelChatStream: (requestId: string) =>
+        call<boolean>("cancel_chat_stream", { requestId }),
       modelEmbed: (text: string, modelConfig: ModelConfig) =>
         call<EmbeddingResult>("model_embed", { text, modelConfig: modelConfigToTauriArgs(modelConfig) }),
       modelHealthCheck: (modelConfig: ModelConfig) =>
@@ -204,6 +236,44 @@ export function useTauriCommands(): TauriCommands {
         call<void>("agent_rag_memory_update_profile", { text }),
       agentRagMemoryClear: () =>
         call<void>("agent_rag_memory_clear"),
+      secretEncryptApiKey: (value: string) =>
+        call<string>("secret_encrypt_api_key", { value }),
+      secretDecryptApiKey: (encrypted: string) =>
+        call<string>("secret_decrypt_api_key", { encrypted }),
+      stockSuggest: (keyword: string) =>
+        call<StockSuggestItem[]>("stock_suggest", { keyword }),
+      stockQuote: (codes: string[]) =>
+        call<SinaQuoteField[]>("stock_quote", { codes }),
+      klineImageUrl: (code: string, period: string) =>
+        call<string>("kline_image_url", { code, period }),
+      indexKlineImageUrl: (indexCode: string, period: string) =>
+        call<string>("index_kline_image_url", { indexCode, period }),
+      baostockQueryKline: (code: string, startDate: string, endDate: string, frequency: string, adjustflag?: string) =>
+        call<BaoStockKLine[]>("baostock_query_kline", { code, startDate, endDate, frequency, adjustflag }),
+      baostockQueryFinancial: (code: string, year: number, quarter: number) =>
+        call<BaoStockFinancial[]>("baostock_query_financial", { code, year, quarter }),
+      baostockFinancialReport: (code: string) =>
+        call<BaoStockFinancialResult>("baostock_financial_report", { code }),
+      baostockStockList: () =>
+        call<StockSuggestItem[]>("baostock_stock_list"),
+      eastStockInfo: (code: string, market: string) =>
+        call<EastStockInfo>("east_stock_info", { code, market }),
+      eastMarketIndices: () =>
+        call<MarketIndex[]>("east_market_indices"),
+      writeStockFile: (path: string, content: string, append?: boolean) =>
+        call<string>("write_stock_file", { path, content, append }),
+      baostockScreener: (action: string, days?: number, limit?: number) =>
+        call<ScreenerResult>("baostock_screener", { action, days, limit }),
+      redisHealthCheck: () =>
+        call<boolean>("redis_health_check"),
+      baostockSyncData: () =>
+        call<string>("baostock_sync_data"),
+      baostockSyncStatus: () =>
+        call<SyncStatus>("baostock_sync_status"),
+      syncDailyKline: () =>
+        call<string>("sync_daily_kline"),
+      dailySyncStatus: () =>
+        call<DailySyncStatus>("daily_sync_status"),
     }),
     [call],
   );

@@ -1,13 +1,14 @@
 use crate::adapters::base::{ChatResult, Message, StreamChunk, UsageInfo, ModelConfig};
 use crate::error::{AppError, AppResult};
 use futures_util::stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 pub struct OllamaAdapter;
 
 impl OllamaAdapter {
     pub async fn chat(&self, messages: Vec<Message>, config: &ModelConfig) -> AppResult<ChatResult> {
         let url = format!("{}/api/chat", config.api_url);
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
 
         let request = serde_json::json!({
             "model": config.model_id,
@@ -60,7 +61,7 @@ impl OllamaAdapter {
 
     pub async fn embed(&self, text: &str, config: &ModelConfig) -> AppResult<(Vec<f32>, u32)> {
         let url = format!("{}/api/embeddings", config.api_url);
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
 
         let response = client
             .post(&url)
@@ -92,7 +93,7 @@ impl OllamaAdapter {
 
     pub async fn health_check(&self, config: &ModelConfig) -> AppResult<bool> {
         let url = format!("{}/api/tags", config.api_url);
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
 
         match client.get(&url).send().await {
             Ok(resp) => Ok(resp.status().is_success()),
@@ -105,9 +106,10 @@ impl OllamaAdapter {
         messages: Vec<Message>,
         config: &ModelConfig,
         tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>,
+        token: CancellationToken,
     ) -> AppResult<()> {
         let url = format!("{}/api/chat", config.api_url);
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
 
         let request = serde_json::json!({
             "model": config.model_id,
@@ -117,12 +119,21 @@ impl OllamaAdapter {
             "stream": true,
         });
 
-        let response = client
+        let response = match client
             .post(&url)
             .json(&request)
             .send()
             .await
-            .map_err(|e| AppError::OllamaNotAvailable(format!("连接失败: {}", e)))?;
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                let _ = tx.send(StreamChunk {
+                    content: format!("Ollama 连接失败: {}", e),
+                    done: true,
+                });
+                return Ok(());
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -135,6 +146,10 @@ impl OllamaAdapter {
         let mut buffer = String::new();
 
         while let Some(chunk) = stream.next().await {
+            if token.is_cancelled() {
+                let _ = tx.send(StreamChunk { content: String::new(), done: true });
+                break;
+            }
             let chunk = match chunk {
                 Ok(c) => c,
                 Err(_) => break,

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { t, useLocaleStore, type Locale } from "@/i18n/locale";
+import { IconSaveBtn } from "@/components/common/Icons";
 
 export function GeneralSettings() {
   const locale = useLocaleStore((s) => s.locale);
@@ -38,7 +39,7 @@ export function GeneralSettings() {
             onChange={(e) => setLicenseKey(e.target.value)}
             placeholder={t("general.license.placeholder")}
           />
-          <button className="btn btn-primary text-xs px-3 py-1">{t("save")}</button>
+          <button className="btn btn-ghost text-xs px-3 py-1"><IconSaveBtn size={11} /> {t("save")}</button>
         </div>
       </section>
 

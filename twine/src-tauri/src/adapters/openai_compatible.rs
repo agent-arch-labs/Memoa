@@ -1,6 +1,7 @@
 use crate::adapters::base::{ChatResult, Message, StreamChunk, UsageInfo, ModelConfig};
 use crate::error::{AppError, AppResult};
 use futures_util::stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 pub struct OpenAiCompatibleAdapter;
 
@@ -49,7 +50,7 @@ impl OpenAiCompatibleAdapter {
 
     pub async fn chat(&self, messages: Vec<Message>, config: &ModelConfig) -> AppResult<ChatResult> {
         let url = Self::build_chat_url(&config.api_url);
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
         let request = Self::add_auth(client.post(&url), &config.api_key);
 
         let body = serde_json::json!({
@@ -98,7 +99,7 @@ impl OpenAiCompatibleAdapter {
 
     pub async fn embed(&self, text: &str, config: &ModelConfig) -> AppResult<(Vec<f32>, u32)> {
         let url = Self::build_embed_url(&config.api_url);
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
         let request = Self::add_auth(client.post(&url), &config.api_key);
 
         let response = request
@@ -129,9 +130,23 @@ impl OpenAiCompatibleAdapter {
     }
 
     pub async fn health_check(&self, config: &ModelConfig) -> AppResult<bool> {
-        let url = Self::build_models_url(&config.api_url);
-        let client = reqwest::Client::new();
-        let request = Self::add_auth(client.get(&url), &config.api_key);
+        let models_url = Self::build_models_url(&config.api_url);
+        let client = crate::http_client::get_client();
+        let request = Self::add_auth(client.get(&models_url), &config.api_key);
+
+        match request.send().await {
+            Ok(resp) if resp.status().is_success() => return Ok(true),
+            Ok(_) => {}
+            Err(_) => {}
+        }
+
+        let embed_url = Self::build_embed_url(&config.api_url);
+        let client = crate::http_client::get_client();
+        let request = Self::add_auth(client.post(&embed_url), &config.api_key)
+            .json(&serde_json::json!({
+                "model": config.model_id,
+                "input": "health",
+            }));
 
         match request.send().await {
             Ok(resp) => Ok(resp.status().is_success()),
@@ -144,9 +159,10 @@ impl OpenAiCompatibleAdapter {
         messages: Vec<Message>,
         config: &ModelConfig,
         tx: tokio::sync::mpsc::UnboundedSender<StreamChunk>,
+        token: CancellationToken,
     ) -> AppResult<()> {
         let url = Self::build_chat_url(&config.api_url);
-        let client = reqwest::Client::new();
+        let client = crate::http_client::get_client();
         let request = Self::add_auth(client.post(&url), &config.api_key);
 
         let body = serde_json::json!({
@@ -159,11 +175,16 @@ impl OpenAiCompatibleAdapter {
             "stream": true,
         });
 
-        let response = request
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AppError::Other(format!("API 连接失败: {}", e)))?;
+        let response = match request.json(&body).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                let _ = tx.send(StreamChunk {
+                    content: format!("API 连接失败: {}", e),
+                    done: true,
+                });
+                return Ok(());
+            }
+        };
 
         if !response.status().is_success() {
             let status = response.status();
@@ -176,6 +197,10 @@ impl OpenAiCompatibleAdapter {
         let mut buffer = String::new();
 
         while let Some(chunk) = stream.next().await {
+            if token.is_cancelled() {
+                let _ = tx.send(StreamChunk { content: String::new(), done: true });
+                break;
+            }
             let chunk = match chunk {
                 Ok(c) => c,
                 Err(_) => break,

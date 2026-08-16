@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { t } from "@/i18n/locale";
 import { getJson, setJson } from "@/services/storageService";
+import { IconTest } from "@/components/common/Icons";
 
 export interface KnowledgeBaseConfig {
   endpoint: string;
@@ -138,11 +139,11 @@ export function KnowledgeBaseSettings() {
           </div>
 
           <button
-            className="btn btn-primary text-xs px-3 py-1"
+            className="btn btn-ghost text-xs px-3 py-1"
             onClick={testConnection}
             disabled={testing}
           >
-            {testing ? "测试中..." : t("settings.knowledge_base.test")}
+            <IconTest size={11} /> {testing ? "测试中..." : t("settings.knowledge_base.test")}
           </button>
         </div>
       </section>

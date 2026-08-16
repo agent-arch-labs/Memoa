@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { getJson, setJson } from "@/services/storageService";
 import { t } from "@/i18n/locale";
+import { renderIcon } from "@/components/common/Icons";
 import type { PanelView } from "@/types";
 
 const MENU_CONFIG_KEY = "menu_config";
@@ -20,6 +21,17 @@ const DEFAULT_MENU_ITEMS: MenuItemConfig[] = [
   { id: "graph", label: "图谱", icon: "🔗", enabled: true, order: 3 },
   { id: "daily", label: "日报", icon: "📅", enabled: true, order: 4 },
   { id: "knowledge", label: "知识库", icon: "📚", enabled: true, order: 5 },
+  { id: "trade", label: "交易日志", icon: "💹", enabled: true, order: 6 },
+  { id: "review_hub", label: "复盘", icon: "", enabled: true, order: 7 },
+  { id: "stocks", label: "个股档案", icon: "", enabled: true, order: 8 },
+];
+
+const REVIEW_SUB_ITEMS: { id: PanelView; label: string }[] = [
+  { id: "timeline", label: "时序图" },
+  { id: "review", label: "选股筛选" },
+  { id: "insights", label: "心得体会" },
+  { id: "themes", label: "热点题材" },
+  { id: "strategy", label: "策略管理" },
 ];
 
 const PRESET_ICONS = ["📁", "🔍", "🏷", "🔗", "📅", "📚", "🏠", "⭐", "💡", "📝", "🔖", "📌", "🗂", "📋", "💬", "🧠", "⚡", "🎯", "🔔", "❤️"];
@@ -181,19 +193,19 @@ export function MenuManagementSettings() {
 
         <div className="space-y-0.5">
           {items.map((item) => (
-            <div
-              key={item.id}
-              draggable
-              onDragStart={(e) => handleDragStart(e, item.id)}
-              onDragOver={(e) => handleDragOver(e, item.id)}
-              onDragEnd={handleDragEnd}
-              onDragLeave={handleDragLeave}
-              className={`flex items-center gap-2 px-2 py-2 rounded-lg transition-colors ${
-                item.enabled
-                  ? "bg-[var(--color-surface-secondary)]"
-                  : "bg-[var(--color-surface-secondary)]/40 opacity-50"
-              }`}
-            >
+            <div key={item.id}>
+              <div
+                draggable
+                onDragStart={(e) => handleDragStart(e, item.id)}
+                onDragOver={(e) => handleDragOver(e, item.id)}
+                onDragEnd={handleDragEnd}
+                onDragLeave={handleDragLeave}
+                className={`flex items-center gap-2 px-2 py-2 rounded-lg transition-colors ${
+                  item.enabled
+                    ? "bg-[var(--color-surface-secondary)]"
+                    : "bg-[var(--color-surface-secondary)]/40 opacity-50"
+                }`}
+              >
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <span className="text-[10px] text-[var(--color-text-muted)] cursor-grab shrink-0">
                   ⋮⋮
@@ -225,7 +237,7 @@ export function MenuManagementSettings() {
                       onClick={() => startEditIcon(item.id, item.icon)}
                       title="点击修改图标"
                     >
-                      {item.icon}
+                      {renderIcon(item.icon)}
                     </button>
                   )}
 
@@ -274,6 +286,21 @@ export function MenuManagementSettings() {
                   }`}
                 />
               </button>
+            </div>
+
+              {/* 复盘子菜单项 */}
+              {item.id === "review_hub" && (
+                <div className="ml-8 mt-0.5 space-y-0.5">
+                  {REVIEW_SUB_ITEMS.map((sub) => (
+                    <div
+                      key={sub.id}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-secondary)]/60"
+                    >
+                      <span className="text-[11px] text-[var(--color-text-muted)]">{sub.label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>

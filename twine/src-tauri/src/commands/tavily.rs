@@ -27,7 +27,7 @@ pub struct TavilySearchResponse {
 
 #[tauri::command]
 pub async fn tavily_search(query: String, api_key: String) -> AppResult<TavilySearchResponse> {
-    let client = reqwest::Client::new();
+    let client = crate::http_client::get_client();
     let body = TavilySearchRequest {
         api_key,
         query,

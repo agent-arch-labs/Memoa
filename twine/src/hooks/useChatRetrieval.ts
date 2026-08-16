@@ -39,10 +39,11 @@ export function useChatRetrieval() {
           chunkOffset: r.chunk_offset,
           chunkLength: r.chunk_length,
         });
-        contexts.push(`[来源: ${noteTitle}]\n${r.text}`);
+        const scorePct = (r.score * 100).toFixed(0);
+        contexts.push(`## 📄 ${noteTitle} (${scorePct}%)\n\n${r.text}`);
       }
     } catch (e) {
-      contexts.push(`[提示] 多路检索失败(${String(e).slice(0, 200)})。`);
+      contexts.push(`> 多路检索失败(${String(e).slice(0, 200)})。`);
     }
 
     return { sources, contexts };

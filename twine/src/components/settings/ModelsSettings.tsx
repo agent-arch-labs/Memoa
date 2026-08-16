@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import {
   useSettingsStore,
   getActiveLlmConfig,
@@ -6,6 +6,7 @@ import {
   type LlmModelConfig,
 } from "@/stores/settingsStore";
 import { useTauriCommands } from "@/hooks/useTauriCommands";
+import { IconSaveBtn, IconClose, IconEdit, IconTest, IconTrash, IconAdd, IconDownload } from "@/components/common/Icons";
 import { t } from "@/i18n/locale";
 import { SelectDropdown } from "./SelectDropdown";
 
@@ -110,11 +111,11 @@ function LlmModelForm({
       )}
 
       <div className="flex gap-2">
-        <button className="btn btn-primary text-xs py-1 px-3" onClick={handleSubmit}>
-          {model ? "Save" : "Add"}
+        <button className="btn btn-ghost text-xs py-1 px-3" onClick={handleSubmit}>
+          <IconSaveBtn size={11} /> {model ? "Save" : "Add"}
         </button>
         <button className="btn btn-ghost text-xs py-1 px-3" onClick={onCancel}>
-          {t("cancel")}
+          <IconClose size={10} /> {t("cancel")}
         </button>
       </div>
     </div>
@@ -128,6 +129,10 @@ function LlmModelItem({
   onActivate,
   onEdit,
   onDelete,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+  onDragLeave,
 }: {
   model: LlmModelConfig;
   isActive: boolean;
@@ -135,6 +140,10 @@ function LlmModelItem({
   onActivate: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onDragStart: (e: React.DragEvent, id: string) => void;
+  onDragOver: (e: React.DragEvent, id: string) => void;
+  onDragEnd: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
 }) {
   const [testStatus, setTestStatus] = useState<string | null>(null);
 
@@ -156,13 +165,24 @@ function LlmModelItem({
 
   return (
     <div
-      className={`flex items-center gap-1 px-2 py-1.5 cursor-pointer hover:bg-[var(--color-surface-hover)] text-xs ${
+      draggable
+      className={`group flex items-center gap-1 px-2 py-1.5 cursor-pointer hover:bg-[var(--color-surface-hover)] text-xs ${
         isActive
           ? "bg-[var(--color-surface-hover)] border-l-2 border-[var(--color-accent)]"
           : ""
       }`}
       onClick={onActivate}
+      onDragStart={(e) => onDragStart(e, model.id)}
+      onDragOver={(e) => onDragOver(e, model.id)}
+      onDragEnd={onDragEnd}
+      onDragLeave={onDragLeave}
     >
+      <span
+        className="shrink-0 cursor-grab active:cursor-grabbing text-[var(--color-text-muted)] opacity-30 group-hover:opacity-60 transition-opacity select-none"
+        title="拖拽排序"
+      >
+        ⠿
+      </span>
       <span
         className={`w-1.5 h-1.5 rounded-full shrink-0 ${
           model.provider === "ollama" ? "bg-green-400" : "bg-blue-400"
@@ -173,25 +193,25 @@ function LlmModelItem({
         {PROVIDER_SHORT[model.provider]}
       </span>
       <button
-        className="btn btn-ghost px-0.5 text-[10px] shrink-0"
+        className="icon-btn icon-btn-sm shrink-0"
         onClick={handleTest}
         title="Test connection"
       >
-        {testStatus || "⟳"}
+        {testStatus || <IconTest size={10} />}
       </button>
       <button
-        className="btn btn-ghost px-0.5 text-[10px] shrink-0"
+        className="icon-btn icon-btn-sm shrink-0"
         onClick={(e) => { e.stopPropagation(); onEdit(); }}
         title="Edit"
       >
-        ✎
+        <IconEdit size={10} />
       </button>
       <button
-        className="btn btn-ghost px-0.5 text-[10px] shrink-0"
+        className="icon-btn icon-btn-sm shrink-0"
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         title="Delete"
       >
-        ✕
+        <IconTrash size={10} />
       </button>
     </div>
   );
@@ -204,6 +224,8 @@ export function ModelsSettings() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [embedStatus, setEmbedStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragItemRef = useRef<string | null>(null);
+  const dragOverItemRef = useRef<string | null>(null);
 
   const activeConfig = getActiveLlmConfig(settings);
   const editingModel = editingModelId
@@ -223,6 +245,39 @@ export function ModelsSettings() {
   function handleLlmDelete(id: string) {
     settings.deleteLlmModel(id);
   }
+
+  const handleDragStart = useCallback((e: React.DragEvent, id: string) => {
+    dragItemRef.current = id;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id);
+    (e.currentTarget as HTMLElement).style.opacity = "0.4";
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, _id: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    dragOverItemRef.current = _id;
+  }, []);
+
+  const handleDragEnd = useCallback((e: React.DragEvent) => {
+    (e.currentTarget as HTMLElement).style.opacity = "1";
+    const dragId = dragItemRef.current;
+    const overId = dragOverItemRef.current;
+    if (!dragId || !overId || dragId === overId) return;
+
+    const models = settings.llmModels;
+    const dragIdx = models.findIndex((m) => m.id === dragId);
+    const overIdx = models.findIndex((m) => m.id === overId);
+    if (dragIdx < 0 || overIdx < 0) return;
+    settings.reorderLlmModel(dragIdx, overIdx);
+
+    dragItemRef.current = null;
+    dragOverItemRef.current = null;
+  }, [settings]);
+
+  const handleDragLeave = useCallback(() => {
+    dragOverItemRef.current = null;
+  }, []);
 
   async function handleEmbedTest() {
     setEmbedStatus("Testing...");
@@ -291,10 +346,10 @@ export function ModelsSettings() {
           </div>
           <div className="flex items-center gap-1">
             <button
-              className="btn btn-ghost text-[10px] py-0.5 px-2"
+              className="inline-flex items-center gap-1 text-[10px] py-0.5 px-2 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
               onClick={handleImportClick}
             >
-              Import
+              <IconDownload size={10} /> Import
             </button>
             <input
               ref={fileInputRef}
@@ -304,13 +359,13 @@ export function ModelsSettings() {
               onChange={handleFileSelected}
             />
             <button
-              className="btn btn-ghost text-[10px] py-0.5 px-2"
+              className="inline-flex items-center gap-1 text-[10px] py-0.5 px-2 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
               onClick={() => {
                 setShowAddForm(true);
                 setEditingModelId(null);
               }}
             >
-              + Add
+              <IconAdd size={10} /> Add
             </button>
           </div>
         </div>
@@ -325,6 +380,10 @@ export function ModelsSettings() {
               onActivate={() => settings.setActiveLlmModel(m.id)}
               onEdit={() => { setEditingModelId(m.id); setShowAddForm(false); }}
               onDelete={() => handleLlmDelete(m.id)}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragEnd={handleDragEnd}
+              onDragLeave={handleDragLeave}
             />
           ))}
         </div>
@@ -410,7 +469,7 @@ export function ModelsSettings() {
             className="btn btn-ghost text-xs py-1 px-3"
             onClick={handleEmbedTest}
           >
-            Test Connection
+            <IconTest size={11} /> Test Connection
           </button>
           {embedStatus && (
             <span

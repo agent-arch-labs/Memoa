@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import matter from "gray-matter";
+import { IconLock, IconClose } from "@/components/common/Icons";
 
 interface Props {
   content: string;
@@ -61,13 +62,13 @@ export function NoteDetailPanel({ content, filePath, onClose }: Props) {
     <div className="bg-[var(--color-surface)]">
       <div className="flex items-center justify-between px-3 h-10 border-b border-[var(--color-border)] bg-[var(--color-surface)] shrink-0">
         <h3 className="text-xs font-semibold text-[var(--color-text-primary)]">
-          📋 笔记详情
+          <IconLock size={12} /> 笔记详情
         </h3>
         <button
-          className="btn btn-ghost px-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+          className="icon-btn icon-btn-sm"
           onClick={onClose}
         >
-          ✕
+          <IconClose size={10} />
         </button>
       </div>
 

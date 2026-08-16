@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { getJson } from "@/services/storageService";
+import { IconFolder, IconEdit, IconSheet, IconPdf, IconImage, IconCode, IconFile, IconArchive, IconPaperclip, IconFolderOpen, IconSave, IconBuilding, IconKnowledge, IconHourglass, IconSync, IconRefresh } from "@/components/common/Icons";
+import { ContextMenu } from "@/components/ui/ContextMenu";
+import type { MenuEntry } from "@/components/ui/ContextMenu";
 import type { KnowledgeBaseConfig } from "@/components/settings/KnowledgeBaseSettings";
 
 interface TreeItem {
@@ -127,8 +130,8 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, "").trim();
 }
 
-function fileTypeIcon(fileType: string, isFolder: boolean): string {
-  if (isFolder) return "📁";
+function fileTypeIcon(fileType: string, isFolder: boolean): ReactNode {
+  if (isFolder) return <IconFolder size={12} />;
   const docTypes = ["doc", "docx"];
   const sheetTypes = ["xls", "xlsx", "csv"];
   const pdfTypes = ["pdf"];
@@ -138,14 +141,14 @@ function fileTypeIcon(fileType: string, isFolder: boolean): string {
   const archiveTypes = ["zip", "rar", "7z", "tar", "gz"];
 
   const t = fileType.toLowerCase();
-  if (docTypes.includes(t)) return "📝";
-  if (sheetTypes.includes(t)) return "📊";
-  if (pdfTypes.includes(t)) return "📕";
-  if (imgTypes.includes(t)) return "🖼️";
-  if (codeTypes.includes(t)) return "💻";
-  if (textTypes.includes(t)) return "📄";
-  if (archiveTypes.includes(t)) return "📦";
-  return "📎";
+  if (docTypes.includes(t)) return <IconEdit size={12} />;
+  if (sheetTypes.includes(t)) return <IconSheet size={12} />;
+  if (pdfTypes.includes(t)) return <IconPdf size={12} />;
+  if (imgTypes.includes(t)) return <IconImage size={12} />;
+  if (codeTypes.includes(t)) return <IconCode size={12} />;
+  if (textTypes.includes(t)) return <IconFile size={12} />;
+  if (archiveTypes.includes(t)) return <IconArchive size={12} />;
+  return <IconPaperclip size={12} />;
 }
 
 function statusBadge(status: string, statusDisplay: string): { color: string; label: string } | null {
@@ -440,13 +443,38 @@ export function KnowledgePanel() {
     fetchTree();
   }, [fetchTree]);
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    function close() {
-      setContextMenu(null);
-    }
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
+  const knowledgeContextMenuItems = useMemo<MenuEntry[]>(() => {
+    if (!contextMenu) return [];
+    return [
+      {
+        key: "rename",
+        label: "重命名",
+        icon: (
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M11.013 1.427a1.75 1.75 0 012.474 0l1.086 1.086a1.75 1.75 0 010 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 01-.927-.928l.929-3.25a1.75 1.75 0 01.445-.758l8.61-8.61zm1.414 1.06a.75.75 0 00-1.06 0L2.854 11a.25.25 0 00-.064.108l-.647 2.266 2.266-.647a.25.25 0 00.108-.064l8.51-8.51a.75.75 0 000-1.06l-1.086-1.086z" />
+          </svg>
+        ),
+        onClick: () => {
+          setRenameTarget(contextMenu.base);
+          setRenameBaseName(contextMenu.base.name);
+          setShowRenameDialog(true);
+        },
+      },
+      {
+        key: "delete",
+        label: "删除",
+        icon: (
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ color: "var(--color-error, #ef4444)" }}>
+            <path d="M6.5 1h3l1 1H13v1H3V2h2.5l1-1zM4 5h8l-.5 9H4.5L4 5zm1.5 1.5l.3 6h1l-.3-6h-1zm2.5 0v6h1v-6H8zm2.5 0l-.3 6h1l.3-6h-1z" />
+          </svg>
+        ),
+        onClick: () => {
+          if (confirm(`确定删除知识库「${contextMenu.base.name}」吗？`)) {
+            deleteBase();
+          }
+        },
+      },
+    ];
   }, [contextMenu]);
 
   function gotoBases(category: string, label: string) {
@@ -554,7 +582,7 @@ export function KnowledgePanel() {
             title={item.label}
           >
             <span className="shrink-0 text-xs">
-              {hasChildren ? (expanded.has(item.id) ? "▾" : "▸") : "📁"}
+              {hasChildren ? (expanded.has(item.id) ? "▾" : "▸") : <IconFolder size={10} />}
             </span>
             <span className="truncate text-xs">{item.label}</span>
           </button>
@@ -580,10 +608,10 @@ export function KnowledgePanel() {
         <div className="px-3 py-4 text-xs text-center">
           <p className="text-red-400 mb-2">{basesError}</p>
           <button
-            className="btn btn-primary text-xs px-3 py-1"
+            className="inline-flex items-center gap-1 px-3 py-1 text-xs rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
             onClick={() => fetchBases((nav.kind === "bases" ? nav.category : ""), basesPage)}
           >
-            重试
+            <IconRefresh size={11} /> 重试
           </button>
         </div>
       );
@@ -620,7 +648,7 @@ export function KnowledgePanel() {
                 onContextMenu={(e) => handleBaseContextMenu(e, base)}
               >
                 <div className="flex items-start gap-2">
-                  <span className="text-sm shrink-0 mt-0.5">📚</span>
+                  <span className="text-sm shrink-0 mt-0.5"><IconKnowledge size={14} /></span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-medium text-[var(--color-text-primary)] truncate">
@@ -640,20 +668,20 @@ export function KnowledgePanel() {
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
                       {base.folder_count > 0 && (
                         <span className="text-[9px] text-[var(--color-text-muted)]">
-                          📂 {base.folder_count}
+                          <IconFolderOpen size={9} /> {base.folder_count}
                         </span>
                       )}
                       {base.document_count > 0 && (
                         <span className="text-[9px] text-[var(--color-text-muted)]">
-                          📄 {base.document_count}
+                          <IconFile size={9} /> {base.document_count}
                         </span>
                       )}
                       <span className="text-[9px] text-[var(--color-text-muted)]">
-                        💾 {formatSize(base.used_storage_mb * 1048576)}
+                        <IconSave size={9} /> {formatSize(base.used_storage_mb * 1048576)}
                       </span>
                       {base.organization_name && (
                         <span className="text-[9px] text-[var(--color-text-muted)] truncate max-w-[80px]">
-                          🏢 {base.organization_name}
+                          <IconBuilding size={9} /> {base.organization_name}
                         </span>
                       )}
                     </div>
@@ -703,10 +731,10 @@ export function KnowledgePanel() {
         <div className="px-3 py-4 text-xs text-center">
           <p className="text-red-400 mb-2">{fileError}</p>
           <button
-            className="btn btn-primary text-xs px-3 py-1"
+            className="inline-flex items-center gap-1 px-3 py-1 text-xs rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
             onClick={() => fetchFileNodes((nav.kind === "files" ? nav.kbId : 0), currentParentId, filePage)}
           >
-            重试
+            <IconRefresh size={11} /> 重试
           </button>
         </div>
       );
@@ -805,14 +833,14 @@ export function KnowledgePanel() {
     return (
       <div className="flex items-center justify-center gap-1 px-3 py-2 border-t border-[var(--color-border)]">
         <button
-          className="w-6 h-6 flex items-center justify-center rounded text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] disabled:opacity-30 disabled:cursor-not-allowed"
+          className="icon-btn icon-btn-sm text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
           onClick={() => onPage(1)}
           disabled={page === 1}
         >
           «
         </button>
         <button
-          className="w-6 h-6 flex items-center justify-center rounded text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] disabled:opacity-30 disabled:cursor-not-allowed"
+          className="icon-btn icon-btn-sm text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
           onClick={() => onPage(page - 1)}
           disabled={page === 1}
         >
@@ -822,14 +850,14 @@ export function KnowledgePanel() {
           {page} / {totalPages}
         </span>
         <button
-          className="w-6 h-6 flex items-center justify-center rounded text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] disabled:opacity-30 disabled:cursor-not-allowed"
+          className="icon-btn icon-btn-sm text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
           onClick={() => onPage(page + 1)}
           disabled={page >= totalPages}
         >
           ›
         </button>
         <button
-          className="w-6 h-6 flex items-center justify-center rounded text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] disabled:opacity-30 disabled:cursor-not-allowed"
+          className="icon-btn icon-btn-sm text-[10px] disabled:opacity-30 disabled:cursor-not-allowed"
           onClick={() => onPage(totalPages)}
           disabled={page >= totalPages}
         >
@@ -846,12 +874,12 @@ export function KnowledgePanel() {
           <>
             <span className="text-xs font-medium text-[var(--color-text-muted)]">知识库</span>
             <button
-              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+              className="icon-btn icon-btn-sm"
               onClick={fetchTree}
               title="刷新"
               disabled={loading}
             >
-              {loading ? "⏳" : "🔄"}
+              {loading ? <IconHourglass size={10} /> : <IconSync size={10} />}
             </button>
           </>
         );
@@ -860,10 +888,10 @@ export function KnowledgePanel() {
         return (
           <>
             <button
-              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] flex items-center gap-1"
+              className="inline-flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] px-1.5 py-0.5 rounded-md transition-all duration-150"
               onClick={goBack}
             >
-              <span>←</span>
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="10 3 5 8 10 13" /></svg>
               <span className="font-medium text-[var(--color-text-primary)] truncate">
                 {nav.label}
               </span>
@@ -878,22 +906,22 @@ export function KnowledgePanel() {
         return (
           <>
             <button
-              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] flex items-center gap-1 min-w-0"
+              className="inline-flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] px-1.5 py-0.5 rounded-md transition-all duration-150 min-w-0"
               onClick={goBack}
             >
-              <span className="shrink-0">←</span>
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="10 3 5 8 10 13" /></svg>
               <span className="font-medium text-[var(--color-text-primary)] truncate">
                 {nav.stack.length === 0 ? nav.kbName : nav.stack[nav.stack.length - 1].name}
               </span>
             </button>
             <button
-              className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] shrink-0"
+              className="icon-btn icon-btn-sm shrink-0"
               onClick={() => {
                 fetchFileNodes(nav.kbId, currentParentId, filePage);
               }}
               title="刷新"
             >
-              {fileLoading ? "⏳" : "🔄"}
+              {fileLoading ? <IconHourglass size={10} /> : <IconSync size={10} />}
             </button>
           </>
         );
@@ -935,8 +963,8 @@ export function KnowledgePanel() {
 
     return (
       <div className="flex items-center gap-3 px-3 py-1 text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-        <span>📂 {fileStats.folders} 目录</span>
-        <span>📄 {fileStats.docs} 文件</span>
+        <span><IconFolderOpen size={10} /> {fileStats.folders} 目录</span>
+        <span><IconFile size={10} /> {fileStats.docs} 文件</span>
         <span>共 {fileStats.total} 项</span>
       </div>
     );
@@ -949,8 +977,8 @@ export function KnowledgePanel() {
           return (
             <div className="px-3 py-4 text-xs text-center">
               <p className="text-red-400 mb-2">{error}</p>
-              <button className="btn btn-primary text-xs px-3 py-1" onClick={fetchTree}>
-                重试
+              <button className="inline-flex items-center gap-1 px-3 py-1 text-xs rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150" onClick={fetchTree}>
+                <IconRefresh size={11} /> 重试
               </button>
             </div>
           );
@@ -991,33 +1019,12 @@ export function KnowledgePanel() {
       {renderContent()}
 
       {contextMenu && (
-        <div
-          className="fixed z-50 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg shadow-xl py-1 min-w-[140px]"
-          style={{ left: Math.min(contextMenu.x, window.innerWidth - 160), top: Math.min(contextMenu.y, window.innerHeight - 100) }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            className="w-full text-left px-3 py-1.5 text-xs text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-colors flex items-center gap-2"
-            onClick={() => {
-              setContextMenu(null);
-              setRenameTarget(contextMenu.base);
-              setRenameBaseName(contextMenu.base.name);
-              setShowRenameDialog(true);
-            }}
-          >
-            <span>✏️</span> 重命名
-          </button>
-          <button
-            className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-red-500/10 transition-colors flex items-center gap-2"
-            onClick={() => {
-              if (confirm(`确定删除知识库「${contextMenu.base.name}」吗？`)) {
-                deleteBase();
-              }
-            }}
-          >
-            <span>🗑️</span> 删除
-          </button>
-        </div>
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          items={knowledgeContextMenuItems}
+        />
       )}
 
       {showCreateDialog && (
@@ -1034,7 +1041,7 @@ export function KnowledgePanel() {
                   placeholder="输入知识库名称"
                   value={newBaseName}
                   onChange={(e) => setNewBaseName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && createBase()}
+                  onKeyDown={(e) => !e.nativeEvent.isComposing && e.key === "Enter" && createBase()}
                 />
               </div>
               <div>
@@ -1049,7 +1056,7 @@ export function KnowledgePanel() {
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button
-                className="px-3 py-1.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+                className="px-3 py-1.5 text-xs rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
                 onClick={() => setShowCreateDialog(false)}
               >
                 取消
@@ -1078,12 +1085,12 @@ export function KnowledgePanel() {
                 className="w-full px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-md bg-[var(--color-surface-secondary)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] transition-colors"
                 value={renameBaseName}
                 onChange={(e) => setRenameBaseName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && renameBase()}
+                onKeyDown={(e) => !e.nativeEvent.isComposing && e.key === "Enter" && renameBase()}
               />
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button
-                className="px-3 py-1.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+                className="px-3 py-1.5 text-xs rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] transition-all duration-150"
                 onClick={() => setShowRenameDialog(false)}
               >
                 取消

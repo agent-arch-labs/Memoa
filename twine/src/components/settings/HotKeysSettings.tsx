@@ -1,10 +1,11 @@
 import { t } from "@/i18n/locale";
+import { IconKeyboard } from "@/components/common/Icons";
 
 export function HotKeysSettings() {
   return (
     <div className="flex-1 overflow-y-auto p-4">
       <div className="flex flex-col items-center justify-center py-12 text-center">
-        <div className="text-2xl mb-3 opacity-40">⌨️</div>
+        <div className="text-2xl mb-3 opacity-40"><IconKeyboard size={20} /></div>
         <div className="text-xs font-medium text-[var(--color-text-primary)] mb-1">
           {t("hotkeys.coming_soon")}
         </div>

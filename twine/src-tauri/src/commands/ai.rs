@@ -68,11 +68,11 @@ pub async fn model_chat(
 
     let system_prompt = "你是 Memoa AI 助手，基于用户个人知识库回答问题。\n\
         严格遵守以下规则：\n\
-        1. 用中文回答，简洁清晰。\n\
-        2. 回答中引用具体笔记片段时，标注来源编号 [来源 N]。\n\
-        3. 如果知识库中有相关但信息不完整，说明已知部分并指出缺失。\n\
-        4. 如果知识库中完全没有相关信息，诚实说明。不要编造信息。\n\
-        5. 优先使用知识库中的信息，而非你的训练数据。";
+        1. 直接回答用户问题，不要输出搜索策略、检索思路或自言自语。\n\
+        2. 用中文组织答案，简洁清晰。下方已提供检索到的知识库片段，直接据此回答。\n\
+        3. 引用具体笔记片段时，标注来源编号 [来源 N]。\n\
+        4. 当知识库片段足够回答用户问题时，必须直接回答；只有没有任何相关内容时，才简短说明。\n\
+        5. 不要编造信息，不要模拟搜索过程，不要反问用户需要什么。";
 
     let mut messages = vec![Message {
         role: "system".to_string(),
@@ -89,7 +89,7 @@ pub async fn model_chat(
         messages.push(Message {
             role: "system".to_string(),
             content: format!(
-                "以下是来自知识库的相关笔记片段，请基于这些片段回答用户问题：\n{}",
+                "以下是已检索到的知识库片段，请直接基于这些内容回答用户问题，不要提及检索过程：\n{}",
                 context_text
             ),
         });
@@ -116,11 +116,11 @@ pub async fn model_chat_stream(
 
     let system_prompt = "你是 Memoa AI 助手，基于用户个人知识库回答问题。\n\
         严格遵守以下规则：\n\
-        1. 用中文回答，简洁清晰。\n\
-        2. 回答中引用具体笔记片段时，标注来源编号 [来源 N]。\n\
-        3. 如果知识库中有相关但信息不完整，说明已知部分并指出缺失。\n\
-        4. 如果知识库中完全没有相关信息，诚实说明。不要编造信息。\n\
-        5. 优先使用知识库中的信息，而非你的训练数据。";
+        1. 直接回答用户问题，不要输出搜索策略、检索思路或自言自语。\n\
+        2. 用中文组织答案，简洁清晰。下方已提供检索到的知识库片段，直接据此回答。\n\
+        3. 引用具体笔记片段时，标注来源编号 [来源 N]。\n\
+        4. 当知识库片段足够回答用户问题时，必须直接回答；只有没有任何相关内容时，才简短说明。\n\
+        5. 不要编造信息，不要模拟搜索过程，不要反问用户需要什么。";
 
     let mut messages = vec![Message {
         role: "system".to_string(),
@@ -137,7 +137,7 @@ pub async fn model_chat_stream(
         messages.push(Message {
             role: "system".to_string(),
             content: format!(
-                "以下是来自知识库的相关笔记片段，请基于这些片段回答用户问题：\n{}",
+                "以下是已检索到的知识库片段，请直接基于这些内容回答用户问题，不要提及检索过程：\n{}",
                 context_text
             ),
         });
@@ -149,18 +149,65 @@ pub async fn model_chat_stream(
     });
 
     let (tx, mut rx) = mpsc::unbounded_channel::<StreamChunk>();
+    let tx_error = tx.clone();
+
+    let cancel_token = crate::cancellation::register(&request_id);
+
+    let adapter_token = cancel_token.clone();
+    let event_name = format!("chat-stream-{}", request_id);
+    let app_clone = app_handle.clone();
 
     let adapter_task = tokio::spawn(async move {
-        let _ = adapter.chat_stream(messages, &model_config, tx).await;
+        if let Err(e) = adapter.chat_stream(messages, &model_config, tx, adapter_token).await {
+            let _ = tx_error.send(StreamChunk {
+                content: format!("模型调用失败: {}", e),
+                done: true,
+            });
+        }
     });
 
-    let event_name = format!("chat-stream-{}", request_id);
-    while let Some(chunk) = rx.recv().await {
-        let _ = app_handle.emit(&event_name, &chunk);
+    let mut cancelled = false;
+    loop {
+        tokio::select! {
+            chunk = rx.recv() => {
+                match chunk {
+                    Some(c) => {
+                        let _ = app_handle.emit(&event_name, &c);
+                        if c.done {
+                            break;
+                        }
+                    }
+                    None => {
+                        let _ = app_clone.emit(&event_name, &StreamChunk {
+                            content: String::new(),
+                            done: true,
+                        });
+                        break;
+                    }
+                }
+            }
+            _ = cancel_token.cancelled() => {
+                let _ = app_handle.emit(&event_name, &StreamChunk {
+                    content: String::new(),
+                    done: true,
+                });
+                cancelled = true;
+                break;
+            }
+        }
     }
 
+    if cancelled {
+        adapter_task.abort();
+    }
     let _ = adapter_task.await;
+    crate::cancellation::remove(&request_id);
     Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_chat_stream(request_id: String) -> bool {
+    crate::cancellation::cancel(&request_id)
 }
 
 #[tauri::command]
@@ -236,14 +283,15 @@ pub async fn ollama_chat(
     let client = ollama::OllamaClient::new(&url);
 
     let system_prompt = "你是 Memoa AI 助手，基于用户个人知识库回答问题。\n\
-        用中文回答。引用来源时注明笔记名。\n\
-        如果知识库中没有相关信息，诚实说明。不要编造信息。";
+        直接回答用户问题，不要输出搜索策略或自言自语。\n\
+        用中文组织答案，引用来源时注明笔记名。\n\
+        不要编造信息，不要反问用户需要什么。";
 
     let context_text = if context.is_empty() {
         String::new()
     } else {
         format!(
-            "Context（来自用户知识库的相关笔记片段）:\n{}\n\n---\n\n",
+            "以下是已检索到的知识库片段，请直接基于这些内容回答，不要提及检索过程:\n{}\n\n---\n\n",
             context
                 .iter()
                 .enumerate()
@@ -293,7 +341,6 @@ pub async fn vector_search(
 
     let top_k = top_k.unwrap_or(10);
     let results = crate::embedding::search_similar_chunks(
-        &vault_path,
         &query_embedding,
         top_k as usize,
     )?;
@@ -390,6 +437,24 @@ pub fn bm25_search(
     Ok(results)
 }
 
+fn preprocess_query(raw: &str) -> String {
+    let mut q = raw.trim().to_string();
+
+    q = q.replace(['\t', '\r'], " ");
+
+    let space_re = regex::Regex::new(r"\s{2,}").unwrap();
+    q = space_re.replace_all(&q, " ").to_string();
+
+    let punct_re = regex::Regex::new(r"[？?！!]{3,}$").unwrap();
+    q = punct_re.replace(&q, "?").to_string();
+
+    if q.len() > 200 {
+        q = q.chars().take(200).collect();
+    }
+
+    q.trim().to_string()
+}
+
 #[tauri::command]
 pub async fn multi_search(
     query: String,
@@ -398,6 +463,7 @@ pub async fn multi_search(
     embed_config: Option<ModelConfig>,
     folder_filter: Option<String>,
 ) -> AppResult<Vec<VectorSearchResult>> {
+    let query = preprocess_query(&query);
     let vault_path = {
         let guard = config.vault_path.lock().unwrap();
         guard.clone().ok_or(AppError::VaultNotOpen)?
@@ -476,7 +542,7 @@ pub async fn multi_search(
 
         match embedding_result {
             Ok((query_embedding, _)) => {
-                match crate::embedding::search_similar_chunks(&vault_path, &query_embedding, top_k)
+                match crate::embedding::search_similar_chunks(&query_embedding, top_k)
                 {
                     Ok(results) => {
                         let before = results.len();
@@ -599,7 +665,7 @@ pub async fn vector_index_batch(
         })
         .collect();
 
-    crate::embedding::index_chunks(&vault_path, &chunk_records)?;
+    crate::embedding::index_chunks(&chunk_records)?;
 
     Ok(())
 }

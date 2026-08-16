@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { t } from "@/i18n/locale";
 import { GeneralSettings } from "./GeneralSettings";
+import { renderIcon } from "@/components/common/Icons";
 import { EditSettings } from "./EditSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { HotKeysSettings } from "./HotKeysSettings";
@@ -130,7 +131,7 @@ export function SettingsLayout() {
                 }`}
                 onClick={() => setActivePage(item.id)}
               >
-                <span className="text-xs w-4 text-center shrink-0">{item.icon}</span>
+                <span className="text-xs w-4 text-center shrink-0">{renderIcon(item.icon)}</span>
                 <div className="flex flex-col min-w-0">
                   <span className="truncate">{t(item.labelKey)}</span>
                   <span className="text-[9px] text-[var(--color-text-muted)]/60 truncate">

@@ -129,6 +129,7 @@ mod tests {
 
     #[test]
     fn test_find_by_path_flexible_with_md() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_dir, _db) = setup_db();
         insert_note("notes/mynote.md", "# Hello");
         let result = find_by_path_flexible("notes/mynote.md").unwrap();
@@ -137,6 +138,7 @@ mod tests {
 
     #[test]
     fn test_find_by_path_flexible_without_md() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_dir, _db) = setup_db();
         insert_note("notes/mynote.md", "# Hello");
         let result = find_by_path_flexible("notes/mynote").unwrap();
@@ -146,6 +148,7 @@ mod tests {
 
     #[test]
     fn test_find_by_path_flexible_not_found() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_dir, _db) = setup_db();
         insert_note("notes/mynote.md", "# Hello");
         let result = find_by_path_flexible("notes/nonexistent").unwrap();
@@ -154,6 +157,7 @@ mod tests {
 
     #[test]
     fn test_find_by_path_flexible_non_md_file() {
+        let _lock = crate::db::TEST_DB_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let (_dir, _db) = setup_db();
         insert_note("config.toml", "# config");
         let result = find_by_path_flexible("config.toml").unwrap();

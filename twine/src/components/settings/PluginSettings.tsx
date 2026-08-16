@@ -1,4 +1,5 @@
 import { t } from "@/i18n/locale";
+import { IconPlug } from "@/components/common/Icons";
 
 interface PluginSettingsProps {
   pluginId: string;
@@ -11,7 +12,7 @@ export function PluginSettings({ pluginId }: PluginSettingsProps) {
   return (
     <div className="flex-1 overflow-y-auto p-4">
       <div className="flex flex-col items-center justify-center py-12 text-center">
-        <div className="text-2xl mb-3 opacity-40">🔌</div>
+        <div className="text-2xl mb-3 opacity-40"><IconPlug size={20} /></div>
         <div className="text-xs font-medium text-[var(--color-text-primary)] mb-1">
           {t(key)}
         </div>

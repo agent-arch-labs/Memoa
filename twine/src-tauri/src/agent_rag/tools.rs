@@ -251,7 +251,7 @@ pub async fn run_generate_stream(
         text
     });
 
-    let chat_result = adapter.chat_stream(messages, model_config, stream_tx).await;
+    let chat_result = adapter.chat_stream(messages, model_config, stream_tx, tokio_util::sync::CancellationToken::new()).await;
 
     let full_text = reader_task.await.map_err(|e| {
         crate::error::AppError::Other(format!("流式读取任务失败: {}", e))
@@ -398,7 +398,7 @@ pub async fn run_web_search(
     query: &str,
     api_key: &str,
 ) -> AppResult<String> {
-    let client = reqwest::Client::new();
+    let client = crate::http_client::get_client();
     let body = serde_json::json!({
         "api_key": api_key,
         "query": query,
